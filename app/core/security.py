@@ -1,0 +1,141 @@
+import bcrypt
+import jwt
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+from app.core.config import settings
+
+def hash_password(password: str) -> str:
+    """
+    Hashes a password using bcrypt.
+    """
+    password_bytes = password.encode("utf-8")
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password_bytes, salt).decode("utf-8")
+
+def verify_password(password: str, hashed_password: str) -> bool:
+    """
+    Verifies a password against its bcrypt hash.
+    """
+    password_bytes = password.encode("utf-8")
+    hashed_bytes = hashed_password.encode("utf-8")
+    try:
+        return bcrypt.checkpw(password_bytes, hashed_bytes)
+    except Exception:
+        return False
+
+def create_jwt_token(
+    subject: str,
+    role: str,
+    secret_key: str,
+    expires_delta: timedelta,
+    token_type: str
+) -> str:
+    """
+    Generic function to create encoded JWT.
+    """
+    now = datetime.now(timezone.utc)
+    expire = now + expires_delta
+    to_encode = {
+        "sub": subject,
+        "role": role,
+        "type": token_type,
+        "iat": now,
+        "exp": expire
+    }
+    return jwt.encode(to_encode, secret_key, algorithm="HS256")
+
+def create_access_token(email: str, role: str, expires_delta: Optional[timedelta] = None) -> str:
+    """
+    Generates a short-lived access token.
+    """
+    if expires_delta:
+        expire = expires_delta
+    else:
+        expire = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    
+    return create_jwt_token(
+        subject=email,
+        role=role,
+        secret_key=settings.JWT_SECRET_KEY,
+        expires_delta=expire,
+        token_type="access"
+    )
+
+def create_refresh_token(email: str, role: str, expires_delta: Optional[timedelta] = None) -> str:
+    """
+    Generates a long-lived refresh token.
+    """
+    if expires_delta:
+        expire = expires_delta
+    else:
+        expire = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+        
+    return create_jwt_token(
+        subject=email,
+        role=role,
+        secret_key=settings.JWT_REFRESH_SECRET_KEY,
+        expires_delta=expire,
+        token_type="refresh"
+    )
+
+def decode_access_token(token: str) -> dict:
+    """
+    Decodes and validates a JWT access token.
+    """
+    payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=["HS256"])
+    if payload.get("type") != "access":
+        raise jwt.InvalidTokenError("Token is not an access token")
+    return payload
+
+def decode_refresh_token(token: str) -> dict:
+    """
+    Decodes and validates a JWT refresh token.
+    """
+    payload = jwt.decode(token, settings.JWT_REFRESH_SECRET_KEY, algorithms=["HS256"])
+    if payload.get("type") != "refresh":
+        raise jwt.InvalidTokenError("Token is not a refresh token")
+    return payload
+
+# Security Dependencies
+from fastapi import Depends
+from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy.orm import Session
+from app.db.session import get_db
+from app.models.user import User, UserRole
+from app.core.exceptions import AuthenticationException, AuthorizationException
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+
+def get_current_user(
+    db: Session = Depends(get_db),
+    token: str = Depends(oauth2_scheme)
+) -> User:
+    """
+    FastAPI dependency that extracts and validates the user from the Bearer token.
+    """
+    try:
+        payload = decode_access_token(token)
+    except jwt.ExpiredSignatureError:
+        raise AuthenticationException("Access token has expired.")
+    except jwt.InvalidTokenError:
+        raise AuthenticationException("Invalid access token.")
+        
+    email = payload.get("sub")
+    if not email:
+        raise AuthenticationException("Invalid access token payload.")
+        
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise AuthenticationException("User not found.")
+        
+    return user
+
+def require_role(required_role: UserRole):
+    """
+    Dependency factory to enforce role-based access control.
+    """
+    def dependency(current_user: User = Depends(get_current_user)) -> User:
+        if current_user.role != required_role:
+            raise AuthorizationException(f"Action requires {required_role.value} role.")
+        return current_user
+    return dependency
