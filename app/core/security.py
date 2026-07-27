@@ -104,7 +104,7 @@ from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.core.exceptions import AuthenticationException, AuthorizationException
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/swagger-login")
 
 def get_current_user(
     db: Session = Depends(get_db),

@@ -64,6 +64,10 @@ def review_leave_request(
     if not db_leave:
         raise ResourceNotFoundException(f"Leave request with ID {leave_id} not found.")
         
+    # Validation: leave request must be in PENDING status
+    if db_leave.status != LeaveStatus.PENDING:
+        raise BadRequestException("This leave request has already been reviewed and cannot be modified.")
+
     # Validation: only allow APPROVED or REJECTED status transitions
     if review_in.status not in [LeaveStatus.APPROVED, LeaveStatus.REJECTED]:
         raise BadRequestException("Review status must be either APPROVED or REJECTED.")

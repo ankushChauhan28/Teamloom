@@ -14,14 +14,35 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
     """
     return auth_service.register_user(db=db, user_in=user_in)
 
+from fastapi.security import OAuth2PasswordRequestForm
+
 @router.post("/login", response_model=Token)
 def login(login_in: UserLogin, db: Session = Depends(get_db)):
     """
     Verifies user credentials and issues short-lived access and long-lived refresh tokens.
+    Expects a JSON body with email and password.
     """
     user = auth_service.authenticate_user(db=db, login_in=login_in)
     
     # Generate tokens
+    access_token = create_access_token(email=user.email, role=user.role.value)
+    refresh_token = create_refresh_token(email=user.email, role=user.role.value)
+    
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer"
+    }
+
+@router.post("/swagger-login", response_model=Token, include_in_schema=False)
+def swagger_login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    """
+    Form-data endpoint specifically for Swagger UI's 'Authorize' button authentication.
+    Hidden from the main OpenAPI schema documentation.
+    """
+    login_in = UserLogin(email=form_data.username, password=form_data.password)
+    user = auth_service.authenticate_user(db=db, login_in=login_in)
+    
     access_token = create_access_token(email=user.email, role=user.role.value)
     refresh_token = create_refresh_token(email=user.email, role=user.role.value)
     
