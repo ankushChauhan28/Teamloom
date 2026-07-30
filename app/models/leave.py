@@ -1,13 +1,18 @@
 import enum
-from sqlalchemy import Column, Integer, String, Date, Enum as SQLEnum, DateTime, ForeignKey
+
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+
 from app.db.base import Base
+
 
 class LeaveStatus(str, enum.Enum):
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
+
 
 class LeaveRequest(Base):
     __tablename__ = "leave_requests"
@@ -22,13 +27,5 @@ class LeaveRequest(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships
-    employee = relationship(
-        "User",
-        foreign_keys=[employee_id],
-        back_populates="leave_requests"
-    )
-    reviewer = relationship(
-        "User",
-        foreign_keys=[reviewed_by],
-        back_populates="reviewed_leaves"
-    )
+    employee = relationship("User", foreign_keys=[employee_id], back_populates="leave_requests")
+    reviewer = relationship("User", foreign_keys=[reviewed_by], back_populates="reviewed_leaves")

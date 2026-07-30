@@ -1,19 +1,20 @@
-import urllib.request
-import urllib.parse
 import json
+import urllib.parse
+import urllib.request
 
 BASE_URL = "http://127.0.0.1:8000"
+
 
 def make_request(path, method="GET", data=None, token=None):
     url = f"{BASE_URL}{path}"
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-        
+
     req_data = None
     if data:
         req_data = json.dumps(data).encode("utf-8")
-        
+
     req = urllib.request.Request(url, data=req_data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req) as res:
@@ -25,15 +26,13 @@ def make_request(path, method="GET", data=None, token=None):
             err_body = e.reason
         return e.code, err_body
 
+
 def run_tests():
     print("--- Starting Backend API Verification ---")
-    
+
     # 1. Admin Login
     print("\n[1] Testing Admin Login...")
-    login_payload = {
-        "email": "admin@example.com",
-        "password": "adminpassword123"
-    }
+    login_payload = {"email": "admin@example.com", "password": "adminpassword123"}
     status, body = make_request("/auth/login", "POST", login_payload)
     if status == 200 and "access_token" in body:
         admin_token = body["access_token"]
@@ -48,7 +47,7 @@ def run_tests():
     register_payload = {
         "email": "employee@example.com",
         "full_name": "John Employee",
-        "password": "securepassword123"
+        "password": "securepassword123",
     }
     status, body = make_request("/auth/register", "POST", register_payload)
     if status == 201:
@@ -66,10 +65,7 @@ def run_tests():
 
     # 3. Employee Login
     print("\n[3] Testing Employee Login...")
-    emp_login_payload = {
-        "email": "employee@example.com",
-        "password": "securepassword123"
-    }
+    emp_login_payload = {"email": "employee@example.com", "password": "securepassword123"}
     status, body = make_request("/auth/login", "POST", emp_login_payload)
     if status == 200 and "access_token" in body:
         emp_token = body["access_token"]
@@ -80,9 +76,7 @@ def run_tests():
 
     # 4. Token Refresh
     print("\n[4] Testing Token Refresh...")
-    refresh_payload = {
-        "refresh_token": admin_refresh
-    }
+    refresh_payload = {"refresh_token": admin_refresh}
     status, body = make_request("/auth/refresh", "POST", refresh_payload)
     if status == 200 and "access_token" in body:
         print("    -> Admin token refreshed successfully.")
@@ -106,7 +100,7 @@ def run_tests():
         "description": "Write all routes and services.",
         "priority": "HIGH",
         "due_date": "2026-08-30",
-        "assigned_to": employee_id
+        "assigned_to": employee_id,
     }
     status, body = make_request("/tasks/", "POST", task_payload, token=admin_token)
     if status == 201:
@@ -127,9 +121,7 @@ def run_tests():
 
     # 8. Employee Update Task Status
     print("\n[8] Testing Employee Status Update...")
-    status_payload = {
-        "status": "IN_PROGRESS"
-    }
+    status_payload = {"status": "IN_PROGRESS"}
     status, body = make_request(f"/tasks/{task_id}", "PATCH", status_payload, token=emp_token)
     if status == 200 and body["status"] == "IN_PROGRESS":
         print("    -> Task status updated to IN_PROGRESS successfully.")
@@ -142,7 +134,7 @@ def run_tests():
     leave_payload = {
         "reason": "Personal work",
         "start_date": "2026-09-10",
-        "end_date": "2026-09-12"
+        "end_date": "2026-09-12",
     }
     status, body = make_request("/leaves/", "POST", leave_payload, token=emp_token)
     if status == 201:
@@ -154,9 +146,7 @@ def run_tests():
 
     # 10. Admin Approve Leave
     print("\n[10] Testing Admin Leave Approval...")
-    review_payload = {
-        "status": "APPROVED"
-    }
+    review_payload = {"status": "APPROVED"}
     status, body = make_request(f"/leaves/{leave_id}", "PATCH", review_payload, token=admin_token)
     if status == 200 and body["status"] == "APPROVED" and body["reviewed_by"] is not None:
         print("    -> Leave request approved by Admin successfully.")
@@ -176,6 +166,7 @@ def run_tests():
     print("\n========================================")
     print("   ALL TESTS PASSED SUCCESSFULLY!       ")
     print("========================================")
+
 
 if __name__ == "__main__":
     run_tests()

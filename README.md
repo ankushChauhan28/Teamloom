@@ -57,6 +57,8 @@ alembic/                   # Database migrations configuration and history versi
 3. Install the application dependencies:
    ```bash
    pip install -r requirements.txt
+   # Optional: Install development & code quality tools
+   pip install -r requirements-dev.txt
    ```
 4. Copy the environment variables template and configure the variables:
    ```bash
@@ -111,6 +113,39 @@ Once running, the interactive Swagger documentation is available at:
 
 ---
 
+## Code Quality & Tooling
+The project includes professional Python code quality, linting, formatting, and static typing tooling configured via `pyproject.toml`.
+
+### 1. Running Linter & Formatter
+* **Ruff (Linter)**:
+  ```bash
+  ruff check .
+  # Auto-fix trivial lint issues:
+  ruff check --fix .
+  ```
+* **Black (Code Formatter)**:
+  ```bash
+  black --check .
+  # Auto-format all files:
+  black .
+  ```
+* **Mypy (Static Type Checking)**:
+  ```bash
+  mypy app
+  ```
+
+### 2. Pre-commit Git Hooks
+To automatically enforce code quality checks before every git commit:
+```bash
+# Install git hook scripts
+pre-commit install
+
+# Manually run all hooks on all files
+pre-commit run --all-files
+```
+
+---
+
 ## API Testing & Verification
 
 ### 1. Integration Test Script
@@ -123,3 +158,4 @@ python test_endpoints.py
 Import the pre-configured [postman_collection.json](file:///c:/Users/ankus/Desktop/Employee%20Task%20Management/postman_collection.json) in Postman.
 - **Environment variables**: The collection includes environment-level variables `{{access_token}}` and `{{refresh_token}}`.
 - **Automatic Token Saving**: A post-response test script on the `/auth/login` and `/auth/refresh` endpoints automatically saves active tokens into variables so subsequent requests execute seamlessly.
+

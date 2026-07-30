@@ -1,7 +1,9 @@
 from datetime import date, datetime
-from typing import Optional
+
 from pydantic import BaseModel, ConfigDict
-from app.models.task import TaskStatus, TaskPriority
+
+from app.models.task import TaskPriority, TaskStatus
+
 
 class TaskBase(BaseModel):
     title: str
@@ -9,19 +11,23 @@ class TaskBase(BaseModel):
     priority: TaskPriority
     due_date: date
 
+
 class TaskCreate(TaskBase):
     assigned_to: int
 
+
 class TaskUpdate(BaseModel):
-    title: Optional[str] = None
-    description: Optional[str] = None
-    status: Optional[TaskStatus] = None
-    priority: Optional[TaskPriority] = None
-    due_date: Optional[date] = None
-    assigned_to: Optional[int] = None
+    title: str | None = None
+    description: str | None = None
+    status: TaskStatus | None = None
+    priority: TaskPriority | None = None
+    due_date: date | None = None
+    assigned_to: int | None = None
+
 
 class TaskUpdateStatus(BaseModel):
     status: TaskStatus
+
 
 class TaskRead(TaskBase):
     model_config = ConfigDict(from_attributes=True)

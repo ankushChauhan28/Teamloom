@@ -1,22 +1,23 @@
 from fastapi import FastAPI, Request, status
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
 from app.core.config import settings
 from app.core.exceptions import (
     AppException,
-    ResourceNotFoundException,
-    UserAlreadyExistsException,
-    InvalidCredentialsException,
     AuthenticationException,
     AuthorizationException,
-    BadRequestException
+    BadRequestException,
+    InvalidCredentialsException,
+    ResourceNotFoundException,
+    UserAlreadyExistsException,
 )
-from app.routes import auth, users, tasks, leaves
+from app.routes import auth, leaves, tasks, users
 
 app = FastAPI(
     title="Employee Task Management System API",
     description="A clean, modular FastAPI backend for portfolio and learning demonstration.",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 # Explicit CORS Configuration
@@ -34,59 +35,46 @@ app.include_router(users.router)
 app.include_router(tasks.router)
 app.include_router(leaves.router)
 
+
 @app.get("/")
 def read_root():
-    return {
-        "message": "Welcome to the Employee Task Management System API",
-        "docs_url": "/docs"
-    }
+    return {"message": "Welcome to the Employee Task Management System API", "docs_url": "/docs"}
+
 
 # Centralized Exception Handlers
 @app.exception_handler(ResourceNotFoundException)
 def resource_not_found_handler(request: Request, exc: ResourceNotFoundException):
-    return JSONResponse(
-        status_code=status.HTTP_404_NOT_FOUND,
-        content={"detail": exc.message}
-    )
+    return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": exc.message})
+
 
 @app.exception_handler(UserAlreadyExistsException)
 def user_already_exists_handler(request: Request, exc: UserAlreadyExistsException):
-    return JSONResponse(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        content={"detail": exc.message}
-    )
+    return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": exc.message})
+
 
 @app.exception_handler(InvalidCredentialsException)
 def invalid_credentials_handler(request: Request, exc: InvalidCredentialsException):
-    return JSONResponse(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        content={"detail": exc.message}
-    )
+    return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"detail": exc.message})
+
 
 @app.exception_handler(AuthenticationException)
 def authentication_exception_handler(request: Request, exc: AuthenticationException):
-    return JSONResponse(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        content={"detail": exc.message}
-    )
+    return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"detail": exc.message})
+
 
 @app.exception_handler(AuthorizationException)
 def authorization_exception_handler(request: Request, exc: AuthorizationException):
-    return JSONResponse(
-        status_code=status.HTTP_403_FORBIDDEN,
-        content={"detail": exc.message}
-    )
+    return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"detail": exc.message})
+
 
 @app.exception_handler(BadRequestException)
 def bad_request_handler(request: Request, exc: BadRequestException):
-    return JSONResponse(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        content={"detail": exc.message}
-    )
+    return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": exc.message})
+
 
 @app.exception_handler(AppException)
 def app_exception_handler(request: Request, exc: AppException):
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "An internal server error occurred."}
+        content={"detail": "An internal server error occurred."},
     )

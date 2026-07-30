@@ -1,18 +1,24 @@
 import enum
-from sqlalchemy import Column, Integer, String, Text, Date, Enum as SQLEnum, DateTime, ForeignKey
+
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+
 from app.db.base import Base
+
 
 class TaskStatus(str, enum.Enum):
     PENDING = "PENDING"
     IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
 
+
 class TaskPriority(str, enum.Enum):
     LOW = "LOW"
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
+
 
 class Task(Base):
     __tablename__ = "tasks"
@@ -29,12 +35,6 @@ class Task(Base):
 
     # Relationships
     assigned_employee = relationship(
-        "User",
-        foreign_keys=[assigned_to],
-        back_populates="assigned_tasks"
+        "User", foreign_keys=[assigned_to], back_populates="assigned_tasks"
     )
-    creator = relationship(
-        "User",
-        foreign_keys=[created_by],
-        back_populates="created_tasks"
-    )
+    creator = relationship("User", foreign_keys=[created_by], back_populates="created_tasks")

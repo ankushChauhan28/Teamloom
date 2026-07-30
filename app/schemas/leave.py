@@ -1,18 +1,23 @@
 from datetime import date, datetime
-from typing import Optional
+
 from pydantic import BaseModel, ConfigDict
+
 from app.models.leave import LeaveStatus
+
 
 class LeaveBase(BaseModel):
     reason: str
     start_date: date
     end_date: date
 
+
 class LeaveCreate(LeaveBase):
     pass
 
+
 class LeaveUpdateStatus(BaseModel):
     status: LeaveStatus
+
 
 class LeaveRead(LeaveBase):
     model_config = ConfigDict(from_attributes=True)
@@ -20,5 +25,5 @@ class LeaveRead(LeaveBase):
     id: int
     employee_id: int
     status: LeaveStatus
-    reviewed_by: Optional[int] = None
+    reviewed_by: int | None = None
     created_at: datetime
