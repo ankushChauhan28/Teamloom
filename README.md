@@ -144,18 +144,26 @@ pre-commit install
 pre-commit run --all-files
 ```
 
----
-
 ## API Testing & Verification
 
-### 1. Integration Test Script
-A pre-configured verification script is available in the root folder. With the server running at `http://127.0.0.1:8000`, execute the following to test all endpoints, RBAC checks, and status flows end-to-end:
+### 1. Pytest Test Suite (Primary Test Suite)
+The application includes a professional, industry-standard `pytest` test suite configured in `tests/`.
+
+* **Isolated In-Memory Database**: Tests execute against an isolated in-memory SQLite database (`sqlite:///:memory:`) using FastAPI dependency overrides (`app.dependency_overrides[get_db]`). The development PostgreSQL database is never touched or modified during test runs.
+* **Domain Integration & Service Unit Tests**: Includes HTTP integration test suites (`test_auth.py`, `test_users.py`, `test_tasks.py`, `test_leaves.py`, `test_rbac.py`) and direct service-layer unit tests (`test_services.py`).
+
+**Run the Pytest suite**:
 ```bash
-python test_endpoints.py
+# Run all tests
+pytest
+
+# Run tests with detailed code coverage report
+pytest --cov=app --cov-report=term-missing
 ```
 
-### 2. Postman Collection
-Import the pre-configured [postman_collection.json](file:///c:/Users/ankus/Desktop/Employee%20Task%20Management/postman_collection.json) in Postman.
-- **Environment variables**: The collection includes environment-level variables `{{access_token}}` and `{{refresh_token}}`.
-- **Automatic Token Saving**: A post-response test script on the `/auth/login` and `/auth/refresh` endpoints automatically saves active tokens into variables so subsequent requests execute seamlessly.
+### 2. Manual Verification Scripts & Postman
+* **Integration Script**: `python test_endpoints.py` (requires running server at `http://127.0.0.1:8000`).
+* **QA Suite Script**: `python run_qa_suite.py`.
+* **Postman Collection**: Import [postman_collection.json](file:///c:/Users/ankus/Desktop/Employee%20Task%20Management/postman_collection.json) into Postman.
+
 

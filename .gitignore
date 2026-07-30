@@ -26,3 +26,9 @@ dist/
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
