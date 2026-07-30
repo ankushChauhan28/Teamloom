@@ -250,8 +250,9 @@ The repository contains 1 migration file in `alembic/versions/`:
 | `PATCH` | `/tasks/{id}` | Bearer Token (`get_current_user`) | `TaskUpdate` | `TaskRead` (200 OK) | Updates task (Admin: all fields; Employee: `status` field only). | [app/routes/tasks.py:59](file:///c:/Users/ankus/Desktop/Employee%20Task%20Management/app/routes/tasks.py#L59) (`update_task`) |
 | `DELETE` | `/tasks/{id}` | Bearer Token (`require_role(ADMIN)`) | None | None (204 No Content) | Deletes task by ID (Admin only). | [app/routes/tasks.py:72](file:///c:/Users/ankus/Desktop/Employee%20Task%20Management/app/routes/tasks.py#L72) (`delete_task`) |
 | `POST` | `/leaves/` | Bearer Token (`get_current_user`) | `LeaveCreate` | `LeaveRead` (201 Created) | Submits a leave request for current user. | [app/routes/leaves.py:13](file:///c:/Users/ankus/Desktop/Employee%20Task%20Management/app/routes/leaves.py#L13) (`create_leave`) |
-| `GET` | `/leaves/` | Bearer Token (`get_current_user`) | None (Query: `status`) | `List[LeaveRead]` (200 OK) | Lists leave requests (Admin sees all; Employee sees own requests). | [app/routes/leaves.py:24](file:///c:/Users/ankus/Desktop/Employee%20Task%20Management/app/routes/leaves.py#L24) (`list_leaves`) |
-| `PATCH` | `/leaves/{id}` | Bearer Token (`require_role(ADMIN)`) | `LeaveUpdateStatus` | `LeaveRead` (200 OK) | Approves or rejects a leave request and sets `reviewed_by` (Admin only). | [app/routes/leaves.py:36](file:///c:/Users/ankus/Desktop/Employee%20Task%20Management/app/routes/leaves.py#L36) (`review_leave`) |
+| `GET` | `/leaves/` | Bearer Token (`get_current_user`) | None (Query: `status`, `sort_by`, `skip`, `limit`) | `List[LeaveRead]` (200 OK) | Lists leave requests (Admin sees all; Employee sees own requests). Supports status filtering, dynamic sorting, and pagination. | [app/routes/leaves.py:26](file:///c:/Users/ankus/Desktop/Employee%20Task%20Management/app/routes/leaves.py#L26) (`list_leaves`) |
+| `PATCH` | `/leaves/{id}` | Bearer Token (`require_role(ADMIN)`) | `LeaveUpdateStatus` | `LeaveRead` (200 OK) | Approves or rejects a leave request and sets `reviewed_by` (Admin only). | [app/routes/leaves.py:44](file:///c:/Users/ankus/Desktop/Employee%20Task%20Management/app/routes/leaves.py#L44) (`review_leave`) |
+
 
 ---
 
@@ -321,4 +322,4 @@ This section factually records standard backend features and tools that are **no
 * **No Token Revocation / Blacklisting**: No token blacklist or revocation store (e.g., Redis or database token invalidation table) exists; JWTs remain valid until their expiration timestamp.
 * **No Password Reset or Email Verification**: No endpoints or email services exist for user password resets or email verification flows.
 * **No Soft Delete Support**: Task deletion executes hard SQL `DELETE` queries (`db.delete(db_task)`).
-* **No Leave Pagination**: The `/leaves/` endpoint does not take `skip` or `limit` query parameters (unlike `/tasks/`).
+

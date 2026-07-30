@@ -30,9 +30,17 @@ def create_leave_request(db: Session, leave_in: LeaveCreate, employee_id: int) -
     return db_leave
 
 
-def get_leaves(db: Session, user: User, status: LeaveStatus | None = None) -> list[LeaveRequest]:
+def get_leaves(
+    db: Session,
+    user: User,
+    status: LeaveStatus | None = None,
+    sort_by: str | None = None,
+    skip: int = 0,
+    limit: int = 10,
+) -> list[LeaveRequest]:
     """
     List leave requests. Admin sees all; Employee sees only their own.
+    Supports filtering by status, dynamic column sorting, and pagination.
     """
     query = db.query(LeaveRequest)
 
@@ -42,7 +50,18 @@ def get_leaves(db: Session, user: User, status: LeaveStatus | None = None) -> li
     if status:
         query = query.filter(LeaveRequest.status == status)
 
-    return query.order_by(LeaveRequest.created_at.desc()).all()
+    # Dynamic Sorting
+    if sort_by:
+        if hasattr(LeaveRequest, sort_by):
+            query = query.order_by(getattr(LeaveRequest, sort_by).asc())
+        else:
+            raise BadRequestException(f"Invalid sort column: {sort_by}")
+    else:
+        # Default sort by created_at descending
+        query = query.order_by(LeaveRequest.created_at.desc())
+
+    # Pagination
+    return query.offset(skip).limit(limit).all()
 
 
 def review_leave_request(

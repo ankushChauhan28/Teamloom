@@ -514,7 +514,7 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{base_url}}/leaves?status=PENDING",
+							"raw": "{{base_url}}/leaves?status=PENDING&sort_by=start_date&skip=0&limit=10",
 							"host": [
 								"{{base_url}}"
 							],
@@ -526,10 +526,23 @@
 									"key": "status",
 									"value": "PENDING",
 									"description": "Filter by status: PENDING, APPROVED, REJECTED"
+								},
+								{
+									"key": "sort_by",
+									"value": "start_date",
+									"description": "Sort column (start_date, created_at, etc.)"
+								},
+								{
+									"key": "skip",
+									"value": "0"
+								},
+								{
+									"key": "limit",
+									"value": "10"
 								}
 							]
 						},
-						"description": "Lists leave requests. Admins see all requests; employees see only their own. Can be filtered by status."
+						"description": "Lists leave requests. Admins see all requests; employees see only their own. Supports status filtering, dynamic sorting, and pagination parameters."
 					},
 					"response": []
 				},

@@ -26,14 +26,24 @@ def create_leave(
 @router.get("/", response_model=list[LeaveRead])
 def list_leaves(
     status: LeaveStatus | None = None,
+    sort_by: str | None = None,
+    skip: int = 0,
+    limit: int = 10,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    List leave requests. Admin sees all requests (optional status filtering);
-    Employees see only their own requests.
+    List leave requests. Admin sees all requests; Employees see only their own.
+    Supports filtering by status, dynamic sorting, and pagination.
     """
-    return leave_service.get_leaves(db=db, user=current_user, status=status)
+    return leave_service.get_leaves(
+        db=db,
+        user=current_user,
+        status=status,
+        sort_by=sort_by,
+        skip=skip,
+        limit=limit,
+    )
 
 
 @router.patch("/{id}", response_model=LeaveRead)
