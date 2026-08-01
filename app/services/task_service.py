@@ -1,4 +1,5 @@
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
     AuthorizationException,
@@ -10,12 +11,13 @@ from app.models.user import User, UserRole
 from app.schemas.task import TaskCreate, TaskUpdate, TaskUpdateStatus
 
 
-def create_task(db: Session, task_in: TaskCreate, creator_id: int) -> Task:
+async def create_task(db: AsyncSession, task_in: TaskCreate, creator_id: int) -> Task:
     """
     Creates and assigns a task. Only accessible by Admins (checked at route level).
     """
     # Verify assignee exists
-    assignee = db.query(User).filter(User.id == task_in.assigned_to).first()
+    result = await db.execute(select(User).where(User.id == task_in.assigned_to))
+    assignee = result.scalar_one_or_none()
     if not assignee:
         raise ResourceNotFoundException(f"Assigned user with ID {task_in.assigned_to} not found.")
 
@@ -32,13 +34,13 @@ def create_task(db: Session, task_in: TaskCreate, creator_id: int) -> Task:
         created_by=creator_id,
     )
     db.add(db_task)
-    db.commit()
-    db.refresh(db_task)
+    await db.commit()
+    await db.refresh(db_task)
     return db_task
 
 
-def get_tasks(
-    db: Session,
+async def get_tasks(
+    db: AsyncSession,
     user: User,
     status: TaskStatus | None = None,
     priority: TaskPriority | None = None,
@@ -50,38 +52,41 @@ def get_tasks(
     Lists tasks. Admins see all, employees see only their own assigned tasks.
     Supports filtering, sorting, and pagination.
     """
-    query = db.query(Task)
+    stmt = select(Task)
 
     # Role check: Employee sees only their own assigned tasks
     if user.role == UserRole.EMPLOYEE:
-        query = query.filter(Task.assigned_to == user.id)
+        stmt = stmt.where(Task.assigned_to == user.id)
 
     # Filters
     if status:
-        query = query.filter(Task.status == status)
+        stmt = stmt.where(Task.status == status)
     if priority:
-        query = query.filter(Task.priority == priority)
+        stmt = stmt.where(Task.priority == priority)
 
     # Dynamic Sorting
     if sort_by:
         # Check if the sort_by column is valid on the Task model
         if hasattr(Task, sort_by):
-            query = query.order_by(getattr(Task, sort_by).asc())
+            stmt = stmt.order_by(getattr(Task, sort_by).asc())
         else:
             raise BadRequestException(f"Invalid sort column: {sort_by}")
     else:
         # Default sort by created_at descending
-        query = query.order_by(Task.created_at.desc())
+        stmt = stmt.order_by(Task.created_at.desc())
 
     # Pagination
-    return query.offset(skip).limit(limit).all()
+    stmt = stmt.offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
 
 
-def get_task_by_id(db: Session, task_id: int, user: User) -> Task:
+async def get_task_by_id(db: AsyncSession, task_id: int, user: User) -> Task:
     """
     Retrieves a single task by ID. Performs ownership validation for Employees.
     """
-    db_task = db.query(Task).filter(Task.id == task_id).first()
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    db_task = result.scalar_one_or_none()
     if not db_task:
         raise ResourceNotFoundException(f"Task with ID {task_id} not found.")
 
@@ -92,13 +97,13 @@ def get_task_by_id(db: Session, task_id: int, user: User) -> Task:
     return db_task
 
 
-def update_task(
-    db: Session, task_id: int, task_update: TaskUpdate | TaskUpdateStatus, user: User
+async def update_task(
+    db: AsyncSession, task_id: int, task_update: TaskUpdate | TaskUpdateStatus, user: User
 ) -> Task:
     """
     Updates a task. Admin can update any field; Employee can only update status.
     """
-    db_task = get_task_by_id(db, task_id, user)
+    db_task = await get_task_by_id(db, task_id, user)
 
     update_data = task_update.model_dump(exclude_unset=True)
 
@@ -113,21 +118,22 @@ def update_task(
     for key, value in update_data.items():
         setattr(db_task, key, value)
 
-    db.commit()
-    db.refresh(db_task)
+    await db.commit()
+    await db.refresh(db_task)
     return db_task
 
 
-def delete_task(db: Session, task_id: int, user: User) -> None:
+async def delete_task(db: AsyncSession, task_id: int, user: User) -> None:
     """
     Deletes a task. Admin only (checked at route level, but enforced here too).
     """
     if user.role != UserRole.ADMIN:
         raise AuthorizationException("Only administrators can delete tasks.")
 
-    db_task = db.query(Task).filter(Task.id == task_id).first()
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    db_task = result.scalar_one_or_none()
     if not db_task:
         raise ResourceNotFoundException(f"Task with ID {task_id} not found.")
 
-    db.delete(db_task)
-    db.commit()
+    await db.delete(db_task)
+    await db.commit()

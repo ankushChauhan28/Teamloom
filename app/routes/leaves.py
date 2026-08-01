@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, status
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_user, require_role
 from app.db.session import get_db
@@ -12,31 +12,33 @@ router = APIRouter(prefix="/leaves", tags=["Leaves"])
 
 
 @router.post("/", response_model=LeaveRead, status_code=status.HTTP_201_CREATED)
-def create_leave(
+async def create_leave(
     leave_in: LeaveCreate,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     Submit a leave request. Accessible by any logged-in user (employee_id matches own ID).
     """
-    return leave_service.create_leave_request(db=db, leave_in=leave_in, employee_id=current_user.id)
+    return await leave_service.create_leave_request(
+        db=db, leave_in=leave_in, employee_id=current_user.id
+    )
 
 
 @router.get("/", response_model=list[LeaveRead])
-def list_leaves(
+async def list_leaves(
     status: LeaveStatus | None = None,
     sort_by: str | None = None,
     skip: int = 0,
     limit: int = 10,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     List leave requests. Admin sees all requests; Employees see only their own.
     Supports filtering by status, dynamic sorting, and pagination.
     """
-    return leave_service.get_leaves(
+    return await leave_service.get_leaves(
         db=db,
         user=current_user,
         status=status,
@@ -47,16 +49,16 @@ def list_leaves(
 
 
 @router.patch("/{id}", response_model=LeaveRead)
-def review_leave(
+async def review_leave(
     id: int,
     review_in: LeaveUpdateStatus,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(require_role(UserRole.ADMIN)),
 ):
     """
     Approve or reject a leave request. Admin only.
     Sets the status and updates the reviewer ID to the current admin's ID.
     """
-    return leave_service.review_leave_request(
+    return await leave_service.review_leave_request(
         db=db, leave_id=id, review_in=review_in, reviewer_id=current_admin.id
     )

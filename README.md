@@ -38,6 +38,34 @@ alembic/                   # Database migrations configuration and history versi
 
 ---
 
+## Asynchronous Architecture & Key Concepts
+
+The Employee Task Management backend uses **100% Asynchronous Database Architecture** built with SQLAlchemy 2.0, `asyncpg`, `AsyncSession`, and `async def` endpoints.
+
+### Why Async Matters for FastAPI
+FastAPI is built on Starlette and ASGI (Asynchronous Server Gateway Interface), powered by Python's `asyncio` event loop.
+
+1. **Non-Blocking I/O Execution**:
+   In synchronous frameworks (or with synchronous database drivers like `psycopg2`), executing a database query blocks the worker thread until PostgreSQL responds over the network. Under heavy traffic, thread starvation occurs and request latencies spike.
+2. **Event Loop Efficiency (`asyncpg` + `AsyncSession`)**:
+   By using `async def` routes and `await db.execute(stmt)` with `asyncpg`, when a query executes, control yields back to the `asyncio` event loop. While PostgreSQL computes the result, the event loop serves dozens of other concurrent incoming HTTP requests on the same thread.
+3. **Performance Gains**:
+   - **Scalability**: Handles high concurrent request volume (RPS) with significantly lower CPU & memory footprint.
+   - **Resilience**: Prevents worker thread exhaustion during DB latency spikes.
+
+---
+
+###  Guide: "Walk me through Sync vs Async in your project"
+
+> *"In this project, we migrated from synchronous SQLAlchemy with `psycopg2` to fully asynchronous database handling using SQLAlchemy 2.0, `asyncpg`, and `AsyncSession`.*
+> 
+> *FastAPI is an ASGI asynchronous framework. In a synchronous setup, every database query blocks the thread waiting for network I/O. By converting route handlers and service logic to `async def` using `select()` constructs with `await db.execute()`, we made database I/O non-blocking.*
+> 
+> *When PostgreSQL processes a query, Python's event loop immediately switches context to process other concurrent incoming HTTP requests. We also configured Alembic to execute migrations via `async_engine.connect()` with `run_sync()`, and built an async Pytest test suite using `httpx.AsyncClient`, `aiosqlite` in-memory database, and `@pytest.mark.asyncio` fixtures to guarantee 100% test isolation."*
+
+---
+
+
 ## Setup Instructions
 
 ### 1. Prerequisites

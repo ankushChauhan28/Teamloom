@@ -1,5 +1,6 @@
 import jwt
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
     AuthenticationException,
@@ -16,11 +17,12 @@ from app.models.user import User, UserRole
 from app.schemas.user import UserCreate, UserLogin
 
 
-def register_user(db: Session, user_in: UserCreate) -> User:
+async def register_user(db: AsyncSession, user_in: UserCreate) -> User:
     """
     Registers a new user. Default role is EMPLOYEE.
     """
-    existing_user = db.query(User).filter(User.email == user_in.email).first()
+    result = await db.execute(select(User).where(User.email == user_in.email))
+    existing_user = result.scalar_one_or_none()
     if existing_user:
         raise UserAlreadyExistsException("A user with this email already exists.")
 
@@ -32,22 +34,23 @@ def register_user(db: Session, user_in: UserCreate) -> User:
         role=UserRole.EMPLOYEE,
     )
     db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
+    await db.commit()
+    await db.refresh(db_user)
     return db_user
 
 
-def authenticate_user(db: Session, login_in: UserLogin) -> User:
+async def authenticate_user(db: AsyncSession, login_in: UserLogin) -> User:
     """
     Authenticates a user by checking email and verifying password.
     """
-    user = db.query(User).filter(User.email == login_in.email).first()
+    result = await db.execute(select(User).where(User.email == login_in.email))
+    user = result.scalar_one_or_none()
     if not user or not verify_password(login_in.password, user.hashed_password):
         raise InvalidCredentialsException("Incorrect email or password.")
     return user
 
 
-def refresh_access_token(db: Session, refresh_token: str) -> dict:
+async def refresh_access_token(db: AsyncSession, refresh_token: str) -> dict:
     """
     Exchanges a valid refresh token for a new access token.
     """
@@ -62,7 +65,8 @@ def refresh_access_token(db: Session, refresh_token: str) -> dict:
     if not email:
         raise AuthenticationException("Invalid refresh token payload.")
 
-    user = db.query(User).filter(User.email == email).first()
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
     if not user:
         raise AuthenticationException("User not found.")
 

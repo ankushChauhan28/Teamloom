@@ -2,19 +2,21 @@
 Integration Tests for User Endpoints (/users/)
 """
 
+import pytest
 from fastapi import status
-from fastapi.testclient import TestClient
+from httpx import AsyncClient
 
 from app.models.user import User
 
 
-def test_get_me_success(
-    client: TestClient, employee_user: User, employee_headers: dict[str, str]
+@pytest.mark.asyncio
+async def test_get_me_success(
+    client: AsyncClient, employee_user: User, employee_headers: dict[str, str]
 ) -> None:
     """
     Test retrieving own user profile (`GET /users/me`) returns 200 and matches user payload.
     """
-    response = client.get("/users/me", headers=employee_headers)
+    response = await client.get("/users/me", headers=employee_headers)
     assert response.status_code == status.HTTP_200_OK
 
     data = response.json()
@@ -24,22 +26,24 @@ def test_get_me_success(
     assert data["role"] == "EMPLOYEE"
 
 
-def test_get_me_unauthenticated_fails(client: TestClient) -> None:
+@pytest.mark.asyncio
+async def test_get_me_unauthenticated_fails(client: AsyncClient) -> None:
     """
     Test accessing `/users/me` without Authorization header returns 401 Unauthorized.
     """
-    response = client.get("/users/me")
+    response = await client.get("/users/me")
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
 
-def test_update_me_success(
-    client: TestClient, employee_user: User, employee_headers: dict[str, str]
+@pytest.mark.asyncio
+async def test_update_me_success(
+    client: AsyncClient, employee_user: User, employee_headers: dict[str, str]
 ) -> None:
     """
     Test updating own full name (`PATCH /users/me`) returns updated user model.
     """
     payload = {"full_name": "Updated John Employee"}
-    response = client.patch("/users/me", json=payload, headers=employee_headers)
+    response = await client.patch("/users/me", json=payload, headers=employee_headers)
     assert response.status_code == status.HTTP_200_OK
 
     data = response.json()
@@ -47,8 +51,9 @@ def test_update_me_success(
     assert data["email"] == employee_user.email
 
 
-def test_list_employees_by_admin(
-    client: TestClient,
+@pytest.mark.asyncio
+async def test_list_employees_by_admin(
+    client: AsyncClient,
     admin_user: User,
     employee_user: User,
     admin_headers: dict[str, str],
@@ -56,12 +61,11 @@ def test_list_employees_by_admin(
     """
     Test listing employees (`GET /users/`) as Admin returns a list of EMPLOYEE role users.
     """
-    response = client.get("/users/", headers=admin_headers)
+    response = await client.get("/users/", headers=admin_headers)
     assert response.status_code == status.HTTP_200_OK
 
     data = response.json()
     assert isinstance(data, list)
     assert len(data) >= 1
-    # Verify all returned users have role EMPLOYEE
     for item in data:
         assert item["role"] == "EMPLOYEE"

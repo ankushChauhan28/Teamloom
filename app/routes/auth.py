@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, status
-from sqlalchemy.orm import Session
+from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_access_token, create_refresh_token
 from app.db.session import get_db
@@ -10,23 +11,20 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
-def register(user_in: UserCreate, db: Session = Depends(get_db)):
+async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
     """
     Registers a new employee user. Role defaults to EMPLOYEE.
     """
-    return auth_service.register_user(db=db, user_in=user_in)
-
-
-from fastapi.security import OAuth2PasswordRequestForm
+    return await auth_service.register_user(db=db, user_in=user_in)
 
 
 @router.post("/login", response_model=Token)
-def login(login_in: UserLogin, db: Session = Depends(get_db)):
+async def login(login_in: UserLogin, db: AsyncSession = Depends(get_db)):
     """
     Verifies user credentials and issues short-lived access and long-lived refresh tokens.
     Expects a JSON body with email and password.
     """
-    user = auth_service.authenticate_user(db=db, login_in=login_in)
+    user = await auth_service.authenticate_user(db=db, login_in=login_in)
 
     # Generate tokens
     access_token = create_access_token(email=user.email, role=user.role.value)
@@ -36,13 +34,15 @@ def login(login_in: UserLogin, db: Session = Depends(get_db)):
 
 
 @router.post("/swagger-login", response_model=Token, include_in_schema=False)
-def swagger_login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+async def swagger_login(
+    form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)
+):
     """
     Form-data endpoint specifically for Swagger UI's 'Authorize' button authentication.
     Hidden from the main OpenAPI schema documentation.
     """
     login_in = UserLogin(email=form_data.username, password=form_data.password)
-    user = auth_service.authenticate_user(db=db, login_in=login_in)
+    user = await auth_service.authenticate_user(db=db, login_in=login_in)
 
     access_token = create_access_token(email=user.email, role=user.role.value)
     refresh_token = create_refresh_token(email=user.email, role=user.role.value)
@@ -51,8 +51,8 @@ def swagger_login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session 
 
 
 @router.post("/refresh", response_model=Token)
-def refresh(refresh_in: TokenRefresh, db: Session = Depends(get_db)):
+async def refresh(refresh_in: TokenRefresh, db: AsyncSession = Depends(get_db)):
     """
     Exchanges a valid refresh token for a new access token.
     """
-    return auth_service.refresh_access_token(db=db, refresh_token=refresh_in.refresh_token)
+    return await auth_service.refresh_access_token(db=db, refresh_token=refresh_in.refresh_token)

@@ -2,8 +2,15 @@ from datetime import UTC, datetime, timedelta
 
 import bcrypt
 import jwt
+from fastapi import Depends
+from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.exceptions import AuthenticationException, AuthorizationException
+from app.db.session import get_db
+from app.models.user import User, UserRole
 
 
 def hash_password(password: str) -> str:
@@ -95,19 +102,12 @@ def decode_refresh_token(token: str) -> dict:
     return payload
 
 
-# Security Dependencies
-from fastapi import Depends
-from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy.orm import Session
-
-from app.core.exceptions import AuthenticationException, AuthorizationException
-from app.db.session import get_db
-from app.models.user import User, UserRole
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/swagger-login")
 
 
-def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)) -> User:
+async def get_current_user(
+    db: AsyncSession = Depends(get_db), token: str = Depends(oauth2_scheme)
+) -> User:
     """
     FastAPI dependency that extracts and validates the user from the Bearer token.
     """
@@ -122,7 +122,8 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
     if not email:
         raise AuthenticationException("Invalid access token payload.")
 
-    user = db.query(User).filter(User.email == email).first()
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
     if not user:
         raise AuthenticationException("User not found.")
 
@@ -134,7 +135,7 @@ def require_role(required_role: UserRole):
     Dependency factory to enforce role-based access control.
     """
 
-    def dependency(current_user: User = Depends(get_current_user)) -> User:
+    async def dependency(current_user: User = Depends(get_current_user)) -> User:
         if current_user.role != required_role:
             raise AuthorizationException(f"Action requires {required_role.value} role.")
         return current_user

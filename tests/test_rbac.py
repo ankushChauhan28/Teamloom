@@ -1,23 +1,18 @@
 """
 Integration Tests for Role-Based Access Control (RBAC) Enforcements
-
-EDUCATIONAL EXPLANATION - RBAC TESTING:
-----------------------------------------
-RBAC tests ensure that permission rules are strictly enforced across all API endpoints.
-We specifically verify that requests using an EMPLOYEE role access token are blocked with
-HTTP 403 Forbidden when attempting Admin-only operations.
 """
 
 from datetime import date, timedelta
-
+import pytest
 from fastapi import status
-from fastapi.testclient import TestClient
+from httpx import AsyncClient
 
 from app.models.user import User
 
 
-def test_employee_cannot_create_task(
-    client: TestClient,
+@pytest.mark.asyncio
+async def test_employee_cannot_create_task(
+    client: AsyncClient,
     employee_headers: dict[str, str],
     employee_user: User,
 ) -> None:
@@ -31,13 +26,14 @@ def test_employee_cannot_create_task(
         "due_date": str(date.today() + timedelta(days=5)),
         "assigned_to": employee_user.id,
     }
-    response = client.post("/tasks/", json=payload, headers=employee_headers)
+    response = await client.post("/tasks/", json=payload, headers=employee_headers)
     assert response.status_code == status.HTTP_403_FORBIDDEN
     assert "action requires admin role" in response.json()["detail"].lower()
 
 
-def test_employee_cannot_delete_task(
-    client: TestClient,
+@pytest.mark.asyncio
+async def test_employee_cannot_delete_task(
+    client: AsyncClient,
     admin_headers: dict[str, str],
     employee_headers: dict[str, str],
     employee_user: User,
@@ -45,8 +41,7 @@ def test_employee_cannot_delete_task(
     """
     Test Employee attempting to delete a task returns HTTP 403 Forbidden.
     """
-    # Admin creates task
-    task_res = client.post(
+    task_res = await client.post(
         "/tasks/",
         json={
             "title": "Task for Deletion Test",
@@ -59,30 +54,30 @@ def test_employee_cannot_delete_task(
     )
     task_id = task_res.json()["id"]
 
-    # Employee attempts deletion -> 403
-    del_res = client.delete(f"/tasks/{task_id}", headers=employee_headers)
+    del_res = await client.delete(f"/tasks/{task_id}", headers=employee_headers)
     assert del_res.status_code == status.HTTP_403_FORBIDDEN
 
 
-def test_employee_cannot_list_all_employees(
-    client: TestClient, employee_headers: dict[str, str]
+@pytest.mark.asyncio
+async def test_employee_cannot_list_all_employees(
+    client: AsyncClient, employee_headers: dict[str, str]
 ) -> None:
     """
     Test Employee attempting to list all employees (`GET /users/`) returns HTTP 403 Forbidden.
     """
-    response = client.get("/users/", headers=employee_headers)
+    response = await client.get("/users/", headers=employee_headers)
     assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
-def test_employee_cannot_review_leave(
-    client: TestClient,
+@pytest.mark.asyncio
+async def test_employee_cannot_review_leave(
+    client: AsyncClient,
     employee_headers: dict[str, str],
 ) -> None:
     """
     Test Employee attempting to approve/reject a leave request returns HTTP 403 Forbidden.
     """
-    # Employee submits leave
-    sub_res = client.post(
+    sub_res = await client.post(
         "/leaves/",
         json={
             "reason": "Test Leave",
@@ -93,8 +88,7 @@ def test_employee_cannot_review_leave(
     )
     leave_id = sub_res.json()["id"]
 
-    # Employee attempts to approve leave -> 403
-    rev_res = client.patch(
+    rev_res = await client.patch(
         f"/leaves/{leave_id}",
         json={"status": "APPROVED"},
         headers=employee_headers,

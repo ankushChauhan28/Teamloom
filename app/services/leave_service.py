@@ -1,4 +1,5 @@
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
     BadRequestException,
@@ -9,7 +10,9 @@ from app.models.user import User, UserRole
 from app.schemas.leave import LeaveCreate, LeaveUpdateStatus
 
 
-def create_leave_request(db: Session, leave_in: LeaveCreate, employee_id: int) -> LeaveRequest:
+async def create_leave_request(
+    db: AsyncSession, leave_in: LeaveCreate, employee_id: int
+) -> LeaveRequest:
     """
     Submits a leave request. Employees create their own.
     """
@@ -25,13 +28,13 @@ def create_leave_request(db: Session, leave_in: LeaveCreate, employee_id: int) -
         status=LeaveStatus.PENDING,
     )
     db.add(db_leave)
-    db.commit()
-    db.refresh(db_leave)
+    await db.commit()
+    await db.refresh(db_leave)
     return db_leave
 
 
-def get_leaves(
-    db: Session,
+async def get_leaves(
+    db: AsyncSession,
     user: User,
     status: LeaveStatus | None = None,
     sort_by: str | None = None,
@@ -42,35 +45,38 @@ def get_leaves(
     List leave requests. Admin sees all; Employee sees only their own.
     Supports filtering by status, dynamic column sorting, and pagination.
     """
-    query = db.query(LeaveRequest)
+    stmt = select(LeaveRequest)
 
     if user.role == UserRole.EMPLOYEE:
-        query = query.filter(LeaveRequest.employee_id == user.id)
+        stmt = stmt.where(LeaveRequest.employee_id == user.id)
 
     if status:
-        query = query.filter(LeaveRequest.status == status)
+        stmt = stmt.where(LeaveRequest.status == status)
 
     # Dynamic Sorting
     if sort_by:
         if hasattr(LeaveRequest, sort_by):
-            query = query.order_by(getattr(LeaveRequest, sort_by).asc())
+            stmt = stmt.order_by(getattr(LeaveRequest, sort_by).asc())
         else:
             raise BadRequestException(f"Invalid sort column: {sort_by}")
     else:
         # Default sort by created_at descending
-        query = query.order_by(LeaveRequest.created_at.desc())
+        stmt = stmt.order_by(LeaveRequest.created_at.desc())
 
     # Pagination
-    return query.offset(skip).limit(limit).all()
+    stmt = stmt.offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
 
 
-def review_leave_request(
-    db: Session, leave_id: int, review_in: LeaveUpdateStatus, reviewer_id: int
+async def review_leave_request(
+    db: AsyncSession, leave_id: int, review_in: LeaveUpdateStatus, reviewer_id: int
 ) -> LeaveRequest:
     """
     Approves or rejects a leave request. Admin only (checked at route level).
     """
-    db_leave = db.query(LeaveRequest).filter(LeaveRequest.id == leave_id).first()
+    result = await db.execute(select(LeaveRequest).where(LeaveRequest.id == leave_id))
+    db_leave = result.scalar_one_or_none()
     if not db_leave:
         raise ResourceNotFoundException(f"Leave request with ID {leave_id} not found.")
 
@@ -88,6 +94,6 @@ def review_leave_request(
     db_leave.status = review_in.status
     db_leave.reviewed_by = reviewer_id
 
-    db.commit()
-    db.refresh(db_leave)
+    await db.commit()
+    await db.refresh(db_leave)
     return db_leave
