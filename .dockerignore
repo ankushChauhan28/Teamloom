@@ -1,0 +1,34 @@
+# Python virtual environments & bytecode
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+
+# Git & Version Control
+.git/
+.gitignore
+
+# Environment variables & secrets (Loaded via Docker Compose env_file)
+.env
+
+# Testing & Coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+
+# IDE & Editor metadata
+.idea/
+.vscode/
+*.swp
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini

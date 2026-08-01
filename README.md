@@ -103,15 +103,86 @@ ADMIN_EMAIL="admin@example.com" ADMIN_PASSWORD="adminpassword123" python seed_ad
 ---
 
 ## Running the Server
-Start the development server using Uvicorn:
+
+### Option A: Run with Docker (Recommended)
+The project includes an enterprise-ready Docker setup powering both the FastAPI application server (`app`) and PostgreSQL database (`db`) using `docker-compose`.
+
+```bash
+docker compose up --build -d
+```
+
+### Option B: Running Locally (without Docker)
+Start the local development server using Uvicorn:
 ```bash
 uvicorn app.main:app --reload
 ```
-Once running, the interactive Swagger documentation is available at:
+
+Once running (via Docker or local Uvicorn), interactive Swagger documentation is available at:
 - **Swagger UI**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 - **ReDoc**: [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
 
 ---
+
+## Run with Docker Details
+
+
+### 1. Starting the Containers
+Build and launch both application and database containers in detached mode:
+```bash
+docker compose up --build -d
+```
+* **Automated Database Migrations**: The container startup script ([docker-entrypoint.sh](file:///c:/Users/ankus/Desktop/Employee%20Task%20Management/docker-entrypoint.sh)) automatically runs `alembic upgrade head` before Uvicorn starts.
+
+### 2. Seeding the Admin User inside Container
+Execute the admin seeding script inside the running `app` container:
+```bash
+# Non-interactive mode with environment variables:
+docker compose exec -e ADMIN_EMAIL="admin@example.com" -e ADMIN_PASSWORD="adminpassword123" app python seed_admin.py
+
+# Interactive mode:
+docker compose exec app python seed_admin.py
+```
+
+### 3. Viewing Logs & Stopping Services
+```bash
+# View live application logs:
+docker compose logs -f app
+
+# Stop containers (database data persists in named volume):
+docker compose down
+
+# Stop containers and erase persistent database volume:
+docker compose down -v
+```
+
+---
+
+## Docker Architecture &  Concepts
+
+### Key Design Choices Explained
+
+1. **Multi-Stage Builds (`Dockerfile`)**:
+   * **Why**: Stage 1 (`builder`) installs build tools (`gcc`, `libpq-dev`) and compiles python wheels into `/build/wheels`. Stage 2 (`runtime`) copies *only* the pre-built wheels into a clean `python:3.12-slim` image.
+   * **Benefit**: Reduces final image size significantly and eliminates build compilers from production containers, shrinking the attack surface.
+
+2. **Non-Root User Security (`appuser`)**:
+   * **Why**: Containers by default run as `root`. We create an unprivileged system user (`appuser:appgroup`) and switch execution context via `USER appuser`.
+   * **Benefit**: Prevents container breakout vulnerabilities from gaining root privileges on the host system.
+
+3. **Layer Caching Optimization**:
+   * **Why**: We `COPY requirements.txt .` and run `pip wheel` *before* copying application source code (`COPY app/`).
+   * **Benefit**: Docker caches the dependency layer. Modifying source code avoids re-downloading and re-building unchanged Python packages.
+
+4. **Container Healthchecks & Service Dependencies**:
+   * **Why**: The `db` service runs `pg_isready -U postgres`, and `app` uses `depends_on: db: condition: service_healthy`.
+   * **Benefit**: Guarantees that Alembic migrations run only after PostgreSQL is fully ready to accept database connections, avoiding connection refactoring crashes on cold start.
+
+5. **Data Persistence via Named Volumes**:
+   * **Why**: PostgreSQL data is mapped to `postgres_data:/var/lib/postgresql/data`.
+   * **Benefit**: Database records persist reliably even when containers are stopped, recreated, or updated.
+
+---
+
 
 ## Code Quality & Tooling
 The project includes professional Python code quality, linting, formatting, and static typing tooling configured via `pyproject.toml`.
