@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     JWT_REFRESH_SECRET_KEY: str
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    COOKIE_SECURE: bool = False
 
     # CORS Origins can be a JSON-formatted list or a comma-separated string
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]

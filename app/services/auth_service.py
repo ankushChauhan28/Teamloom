@@ -9,6 +9,7 @@ from app.core.exceptions import (
 )
 from app.core.security import (
     create_access_token,
+    create_refresh_token,
     decode_refresh_token,
     hash_password,
     verify_password,
@@ -50,9 +51,10 @@ async def authenticate_user(db: AsyncSession, login_in: UserLogin) -> User:
     return user
 
 
-async def refresh_access_token(db: AsyncSession, refresh_token: str) -> dict:
+async def refresh_access_token(db: AsyncSession, refresh_token: str) -> tuple[str, str]:
     """
-    Exchanges a valid refresh token for a new access token.
+    Exchanges a valid refresh token for a new access token and rotates the refresh token.
+    Returns tuple of (new_access_token, new_refresh_token).
     """
     try:
         payload = decode_refresh_token(refresh_token)
@@ -71,8 +73,5 @@ async def refresh_access_token(db: AsyncSession, refresh_token: str) -> dict:
         raise AuthenticationException("User not found.")
 
     new_access_token = create_access_token(email=user.email, role=user.role.value)
-    return {
-        "access_token": new_access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer",
-    }
+    new_refresh_token = create_refresh_token(email=user.email, role=user.role.value)
+    return new_access_token, new_refresh_token

@@ -8,6 +8,7 @@ ENV/
 env/
 build/
 dist/
+node_modules/
 *.egg-info/
 
 # Environment variables (NEVER COMMIT THIS FILE)
@@ -31,4 +32,6 @@ Desktop.ini
 .pytest_cache/
 .coverage
 htmlcov/
+test_results.json
+
 

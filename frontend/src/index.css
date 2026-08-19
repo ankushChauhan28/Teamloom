@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+:root {
+  /* Backgrounds / surfaces */
+  --bg-page: #0E1614;        /* page background */
+  --surface-1: #131F1C;      /* cards, panels */
+  --surface-2: #17251F;      /* elevated: modals, dropdowns, popovers */
+
+  /* Borders */
+  --border: #223330;         /* default hairline */
+  --border-strong: #2C4038;  /* hover / emphasized divider */
+
+  /* Text */
+  --text-primary: #DCEAE5;
+  --text-secondary: #8FA79E;
+  --text-muted: #5E7168;
+
+  /* Accent (single accent color — teal) */
+  --accent: #3FA88F;
+  --accent-hover: #4FBE9F;
+  --accent-active: #359078;
+  --on-accent: #04231C;      /* text/icon color when placed ON the accent fill */
+
+  /* Semantic status colors — muted tints, never full saturation */
+  --amber: #D9A441;          /* pending */
+  --amber-bg: rgba(217, 164, 65, 0.12);
+  --teal: #3FA88F;           /* in progress — reuses accent */
+  --teal-bg: rgba(63, 168, 143, 0.12);
+  --green: #6FBE7A;          /* completed / approved / success */
+  --green-bg: rgba(111, 190, 122, 0.12);
+  --coral: #D98C6B;          /* high priority */
+  --coral-bg: rgba(217, 140, 107, 0.12);
+  --red: #D9695A;            /* rejected / destructive / danger */
+  --red-bg: rgba(217, 105, 90, 0.12);
+  --violet: #9C87C9;         /* admin role badge */
+  --violet-bg: rgba(156, 135, 201, 0.12);
+  --blue: #5FA0D9;           /* employee role badge */
+  --blue-bg: rgba(95, 160, 217, 0.12);
+  --slate: #8FA79E;          /* low priority — reuses text-secondary tone */
+  --slate-bg: rgba(143, 167, 158, 0.10);
+}
+
+@layer base {
+  body {
+    background-color: var(--bg-page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    min-height: 100vh;
+    font-weight: 400;
+  }
+}

@@ -1,12 +1,17 @@
 """
-Integration Tests for Authentication Endpoints (/auth/)
+Integration & Unit Tests for Authentication Endpoints (/auth/)
 """
 
+from datetime import timedelta
 import pytest
-from fastapi import status
+from fastapi import Request, Response, status
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security import create_refresh_token
 from app.models.user import User
+from app.routes.auth import login, refresh, swagger_login
+from app.schemas.user import UserLogin
 
 
 @pytest.mark.asyncio
@@ -50,7 +55,7 @@ async def test_register_user_duplicate_email_fails(
 @pytest.mark.asyncio
 async def test_login_user_success(client: AsyncClient, employee_user: User) -> None:
     """
-    Test valid user login returns access and refresh JWT tokens.
+    Test valid user login returns access JWT token in JSON body and refresh token in httpOnly cookie.
     """
     payload = {
         "email": employee_user.email,
@@ -61,8 +66,26 @@ async def test_login_user_success(client: AsyncClient, employee_user: User) -> N
 
     data = response.json()
     assert "access_token" in data
-    assert "refresh_token" in data
+    assert "refresh_token" not in data
     assert data["token_type"] == "bearer"
+    assert "refresh_token" in response.cookies
+
+
+@pytest.mark.asyncio
+async def test_swagger_login_success(client: AsyncClient, employee_user: User) -> None:
+    """
+    Test form-data login endpoint (/auth/swagger-login) returns access token and sets cookie.
+    """
+    data = {
+        "username": employee_user.email,
+        "password": "employeepassword123",
+    }
+    response = await client.post("/auth/swagger-login", data=data)
+    assert response.status_code == status.HTTP_200_OK
+
+    res_data = response.json()
+    assert "access_token" in res_data
+    assert "refresh_token" in response.cookies
 
 
 @pytest.mark.asyncio
@@ -97,26 +120,102 @@ async def test_login_nonexistent_user_returns_401(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_refresh_token_success(client: AsyncClient, employee_user: User) -> None:
     """
-    Test exchanging a valid refresh token for a new access token.
+    Test exchanging a valid refresh token cookie for a new access token and rotated refresh token cookie.
     """
     login_res = await client.post(
         "/auth/login",
         json={"email": employee_user.email, "password": "employeepassword123"},
     )
-    refresh_token = login_res.json()["refresh_token"]
+    assert login_res.status_code == status.HTTP_200_OK
+    assert "refresh_token" in client.cookies
 
-    response = await client.post("/auth/refresh", json={"refresh_token": refresh_token})
+    response = await client.post("/auth/refresh")
     assert response.status_code == status.HTTP_200_OK
 
     data = response.json()
     assert "access_token" in data
-    assert data["refresh_token"] == refresh_token
+    assert "refresh_token" in response.cookies
 
 
 @pytest.mark.asyncio
-async def test_refresh_invalid_token_returns_401(client: AsyncClient) -> None:
+async def test_refresh_missing_cookie_returns_401(client: AsyncClient) -> None:
     """
-    Test sending an invalid refresh token returns HTTP 401 Unauthorized.
+    Test calling refresh without a refresh_token cookie returns HTTP 401 Unauthorized.
     """
-    response = await client.post("/auth/refresh", json={"refresh_token": "invalid.jwt.token"})
+    response = await client.post("/auth/refresh")
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    assert "refresh token cookie missing" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_refresh_invalid_jwt_returns_401(client: AsyncClient) -> None:
+    """
+    Test calling refresh with an invalid refresh_token cookie returns HTTP 401 Unauthorized.
+    """
+    client.cookies.set("refresh_token", "invalid.token.str", path="/auth")
+    response = await client.post("/auth/refresh")
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    assert "invalid refresh token" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_refresh_expired_jwt_returns_401(client: AsyncClient, employee_user: User) -> None:
+    """
+    Test calling refresh with an expired refresh_token cookie returns HTTP 401 Unauthorized.
+    """
+    expired_token = create_refresh_token(
+        email=employee_user.email,
+        role=employee_user.role.value,
+        expires_delta=timedelta(seconds=-10),
+    )
+    client.cookies.set("refresh_token", expired_token, path="/auth")
+    response = await client.post("/auth/refresh")
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    assert "refresh token has expired" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_logout_user_success(client: AsyncClient, employee_user: User) -> None:
+    """
+    Test logging out clears the refresh_token cookie.
+    """
+    await client.post(
+        "/auth/login",
+        json={"email": employee_user.email, "password": "employeepassword123"},
+    )
+    assert "refresh_token" in client.cookies
+
+    response = await client.post("/auth/logout")
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["message"] == "Logged out successfully"
+
+
+@pytest.mark.asyncio
+async def test_unit_direct_auth_routes_execution(
+    db_session: AsyncSession, employee_user: User
+) -> None:
+    """
+    Direct unit test calling route handlers asynchronously for complete coverage tracing.
+    """
+    response = Response()
+    login_in = UserLogin(email=employee_user.email, password="employeepassword123")
+    res_login = await login(login_in=login_in, response=response, db=db_session)
+    assert res_login.access_token is not None
+
+    class FormStub:
+        username = employee_user.email
+        password = "employeepassword123"
+
+    res_swagger = await swagger_login(
+        response=response, form_data=FormStub(), db=db_session
+    )
+    assert res_swagger.access_token is not None
+
+    cookie_token = create_refresh_token(
+        email=employee_user.email, role=employee_user.role.value
+    )
+    req = Request(
+        {"type": "http", "headers": [(b"cookie", f"refresh_token={cookie_token}".encode())]}
+    )
+    res_refresh = await refresh(request=req, response=response, db=db_session)
+    assert res_refresh.access_token is not None

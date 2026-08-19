@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_user, require_role
 from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.schemas.user import UserRead, UserUpdate
+from app.services import user_service
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -28,11 +28,9 @@ async def update_me(
     Update the basic profile details of the current logged-in user.
     Only allows updating non-sensitive fields (like full_name).
     """
-    if user_update.full_name is not None:
-        current_user.full_name = user_update.full_name
-        await db.commit()
-        await db.refresh(current_user)
-    return current_user
+    return await user_service.update_user_profile(
+        db=db, user=current_user, user_update=user_update
+    )
 
 
 @router.get("/", response_model=list[UserRead])
@@ -43,5 +41,4 @@ async def list_employees(
     """
     List all employees in the system. Accessible by Admin only.
     """
-    result = await db.execute(select(User).where(User.role == UserRole.EMPLOYEE))
-    return list(result.scalars().all())
+    return await user_service.get_employees(db=db)
