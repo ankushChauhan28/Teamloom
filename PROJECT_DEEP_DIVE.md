@@ -667,7 +667,7 @@ Employee Task Management/
 ├── Dockerfile                     # Multi-stage Docker build file (python:3.12-slim, non-root user)
 ├── Dockerfile.dev                 # Development Dockerfile variant
 ├── PROJECT_DEEP_DIVE.md           # Master architectural deep-dive & developer onboarding guide
-├── README.md                      # General project overview, Docker instructions, and  concepts
+├── README.md                      # General project overview and Docker setup instructions
 ├── alembic.ini                    # Alembic migration configuration file
 ├── docker-compose.yml             # Orchestrates app and postgres:16-alpine containers with healthchecks
 ├── docker-entrypoint.sh           # Container startup shell script running alembic migrations then uvicorn
