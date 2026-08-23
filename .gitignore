@@ -34,4 +34,8 @@ Desktop.ini
 htmlcov/
 test_results.json
 
+# Private documentation
+docs/INTERVIEW_PREP.md
+
+
 

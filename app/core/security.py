@@ -135,9 +135,24 @@ def require_role(required_role: UserRole):
     Dependency factory to enforce role-based access control.
     """
 
-    async def dependency(current_user: User = Depends(get_current_user)) -> User:
+    async def dependency(
+        current_user: User = Depends(require_password_change_cleared),
+    ) -> User:
         if current_user.role != required_role:
             raise AuthorizationException(f"Action requires {required_role.value} role.")
         return current_user
 
     return dependency
+
+
+async def require_password_change_cleared(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """
+    Dependency that blocks access if current_user.must_change_password is True.
+    Raises AuthorizationException("password_change_required") returning 403.
+    """
+    if current_user.must_change_password:
+        raise AuthorizationException("password_change_required")
+    return current_user
+

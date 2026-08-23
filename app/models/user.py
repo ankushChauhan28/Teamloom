@@ -1,6 +1,6 @@
 import enum
 
-from sqlalchemy import Column, DateTime, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -21,9 +21,23 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     role = Column(SQLEnum(UserRole), default=UserRole.EMPLOYEE, nullable=False)
+    manager_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    employee_code = Column(String, unique=True, index=True, nullable=True)
+    must_change_password = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships (relationships mapped as strings to avoid circular import issues)
+    manager = relationship(
+        "User",
+        remote_side=[id],
+        foreign_keys=[manager_id],
+        back_populates="direct_reports",
+    )
+    direct_reports = relationship(
+        "User",
+        foreign_keys=[manager_id],
+        back_populates="manager",
+    )
     assigned_tasks = relationship(
         "Task",
         foreign_keys="Task.assigned_to",

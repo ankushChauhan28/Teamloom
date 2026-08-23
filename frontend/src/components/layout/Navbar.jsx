@@ -1,17 +1,20 @@
 import React from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { CheckSquare, Calendar, LayoutDashboard } from 'lucide-react'
+import { CheckSquare, Calendar, LayoutDashboard, Users } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 
 export function Navbar({ rightSlot, title = 'employee task management', className = '' }) {
   const user = useAuthStore((state) => state.user)
+  const directReports = useAuthStore((state) => state.directReports)
   const location = useLocation()
 
+  const hasReports = (directReports || []).length > 0
   const homePath = user?.role === 'ADMIN' ? '/admin/tasks' : '/dashboard'
   const leavesPath = user?.role === 'ADMIN' ? '/admin/leaves' : '/leaves'
 
   const isTasksActive = location.pathname === homePath
   const isLeavesActive = location.pathname === leavesPath
+  const isMyTeamActive = location.pathname === '/my-team'
 
   return (
     <header className={`h-14 bg-[var(--surface-1)] border-b border-[var(--border)] px-4 flex items-center justify-between select-none ${className}`}>
@@ -51,6 +54,20 @@ export function Navbar({ rightSlot, title = 'employee task management', classNam
               <Calendar className="w-3.5 h-3.5" />
               <span>{user.role === 'ADMIN' ? 'Leave Approval' : 'Leaves'}</span>
             </Link>
+
+            {hasReports && (
+              <Link
+                to="/my-team"
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                  isMyTeamActive
+                    ? 'bg-[var(--surface-2)] text-[var(--accent)] border border-[var(--border)]'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)]/50'
+                }`}
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>My Team</span>
+              </Link>
+            )}
           </nav>
         )}
       </div>

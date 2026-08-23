@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { Card } from '../components/ui/Card';
 import { Input } from '../components/ui/Input';
@@ -12,33 +12,33 @@ export function LoginPage() {
   const navigate = useNavigate();
   const { login, user, isAuthenticated } = useAuthStore();
 
-  const [email, setEmail] = useState('');
+  const [employeeCode, setEmployeeCode] = useState('');
   const [password, setPassword] = useState('');
 
   const [errors, setErrors] = useState({});
   const [serverError, setServerError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // If already authenticated, redirect based on user role
+  // If already authenticated, redirect based on user role and must_change_password state
   React.useEffect(() => {
     if (isAuthenticated && user) {
-      const targetPath = user.role === 'ADMIN' ? '/admin/tasks' : '/dashboard';
-      navigate(targetPath, { replace: true });
+      if (user.must_change_password) {
+        navigate('/change-password', { replace: true });
+      } else {
+        const targetPath = user.role === 'ADMIN' ? '/admin/tasks' : '/dashboard';
+        navigate(targetPath, { replace: true });
+      }
     }
   }, [isAuthenticated, user, navigate]);
 
   const validate = () => {
     const newErrors = {};
-    if (!email.trim()) {
-      newErrors.email = 'Email address is required.';
-    } else if (!/\S+@\S+\.\S+/.test(email)) {
-      newErrors.email = 'Please enter a valid email address.';
+    if (!employeeCode.trim()) {
+      newErrors.employeeCode = 'Employee ID is required.';
     }
 
     if (!password) {
       newErrors.password = 'Password is required.';
-    } else if (password.length < 6) {
-      newErrors.password = 'Password must be at least 6 characters.';
     }
 
     setErrors(newErrors);
@@ -53,13 +53,16 @@ export function LoginPage() {
 
     setIsSubmitting(true);
     try {
-      const userData = await login(email.trim(), password);
-      const targetPath = userData?.role === 'ADMIN' ? '/admin/tasks' : '/dashboard';
-      navigate(targetPath, { replace: true });
+      const userData = await login(employeeCode.trim(), password);
+      if (userData?.must_change_password) {
+        navigate('/change-password', { replace: true });
+      } else {
+        const targetPath = userData?.role === 'ADMIN' ? '/admin/tasks' : '/dashboard';
+        navigate(targetPath, { replace: true });
+      }
     } catch (err) {
-      // Don't distinguish wrong email vs wrong password for security
       const msg =
-        err.response?.data?.detail || 'Invalid email or password.';
+        err.response?.data?.detail || 'Incorrect employee ID or password.';
       setServerError(msg);
     } finally {
       setIsSubmitting(false);
@@ -97,17 +100,17 @@ export function LoginPage() {
 
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           <Input
-            label="Email address"
-            type="email"
-            placeholder="you@example.com"
-            value={email}
+            label="Employee ID"
+            type="text"
+            placeholder="EMP-1001"
+            value={employeeCode}
             onChange={(e) => {
-              setEmail(e.target.value);
-              if (errors.email) setErrors({ ...errors, email: '' });
+              setEmployeeCode(e.target.value);
+              if (errors.employeeCode) setErrors({ ...errors, employeeCode: '' });
             }}
-            error={errors.email}
+            error={errors.employeeCode}
             disabled={isSubmitting}
-            autoComplete="email"
+            autoComplete="username"
           />
 
           <Input
@@ -139,18 +142,6 @@ export function LoginPage() {
             )}
           </Button>
         </form>
-
-        <div className="mt-6 pt-4 border-t border-[var(--border)] text-center">
-          <p className="text-xs text-[var(--text-secondary)]">
-            Don't have an account?{' '}
-            <Link
-              to="/register"
-              className="text-[var(--accent)] hover:underline font-medium"
-            >
-              Register as Employee
-            </Link>
-          </p>
-        </div>
       </Card>
     </div>
   );

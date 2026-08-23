@@ -3,18 +3,21 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 import { ProtectedRoute } from './components/guards/ProtectedRoute';
 import { AdminRoute } from './components/guards/AdminRoute';
+import { ManagerRoute } from './components/guards/ManagerRoute';
 import { LoginPage } from './pages/LoginPage';
-import { RegisterPage } from './pages/RegisterPage';
+import { ChangePasswordPage } from './pages/ChangePasswordPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { AdminTasksPage } from './pages/AdminTasksPage';
 import { AdminLeavesPage } from './pages/AdminLeavesPage';
 import { LeavesPage } from './pages/LeavesPage';
+import { MyTeamPage } from './pages/MyTeamPage';
 import { Spinner } from './components/ui/Spinner';
 
 // Component to perform role-based root redirection
 function RootRedirect() {
   const { user, isAuthenticated } = useAuthStore();
   if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (user?.must_change_password) return <Navigate to="/change-password" replace />;
   return <Navigate to={user?.role === 'ADMIN' ? '/admin/tasks' : '/dashboard'} replace />;
 }
 
@@ -45,7 +48,16 @@ export function App() {
       <Routes>
         {/* Public Auth Routes */}
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/register" element={<RegisterPage />} />
+
+        {/* Forced Password Change Route */}
+        <Route
+          path="/change-password"
+          element={
+            <ProtectedRoute>
+              <ChangePasswordPage />
+            </ProtectedRoute>
+          }
+        />
 
         {/* Employee Dashboard Route */}
         <Route
@@ -64,6 +76,16 @@ export function App() {
             <ProtectedRoute>
               <LeavesPage />
             </ProtectedRoute>
+          }
+        />
+
+        {/* Manager / Team Lead Portal Route */}
+        <Route
+          path="/my-team"
+          element={
+            <ManagerRoute>
+              <MyTeamPage />
+            </ManagerRoute>
           }
         />
 

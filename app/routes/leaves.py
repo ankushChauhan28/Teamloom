@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_current_user, require_role
+from app.core.security import get_current_user, require_password_change_cleared, require_role
 from app.db.session import get_db
 from app.models.leave import LeaveStatus
 from app.models.user import User, UserRole
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/leaves", tags=["Leaves"])
 async def create_leave(
     leave_in: LeaveCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_password_change_cleared),
 ):
     """
     Submit a leave request. Accessible by any logged-in user (employee_id matches own ID).
@@ -32,7 +32,7 @@ async def list_leaves(
     skip: int = 0,
     limit: int = 10,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_password_change_cleared),
 ):
     """
     List leave requests. Admin sees all requests; Employees see only their own.
@@ -48,17 +48,41 @@ async def list_leaves(
     )
 
 
+@router.get("/team", response_model=list[LeaveRead])
+async def list_team_leaves(
+    status: LeaveStatus | None = LeaveStatus.PENDING,
+    sort_by: str | None = None,
+    skip: int = 0,
+    limit: int = 10,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_password_change_cleared),
+):
+    """
+    List leave requests submitted by any of the current user's direct reports.
+    Defaults to PENDING status. Returns an empty list if the user has no direct reports.
+    """
+    return await leave_service.get_team_leave_requests(
+        db=db,
+        user=current_user,
+        status=status,
+        sort_by=sort_by,
+        skip=skip,
+        limit=limit,
+    )
+
+
 @router.patch("/{id}", response_model=LeaveRead)
 async def review_leave(
     id: int,
     review_in: LeaveUpdateStatus,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_role(UserRole.ADMIN)),
+    current_user: User = Depends(require_password_change_cleared),
 ):
     """
-    Approve or reject a leave request. Admin only.
-    Sets the status and updates the reviewer ID to the current admin's ID.
+    Approve or reject a leave request.
+    Accessible by Admin OR the direct manager of the applicant employee.
+    Sets the status and updates the reviewer ID to the current user's ID.
     """
     return await leave_service.review_leave_request(
-        db=db, leave_id=id, review_in=review_in, reviewer_id=current_admin.id
+        db=db, leave_id=id, review_in=review_in, reviewer=current_user
     )

@@ -11,9 +11,10 @@ from app.models.user import User, UserRole
 from app.schemas.task import TaskCreate, TaskUpdate, TaskUpdateStatus
 
 
-async def create_task(db: AsyncSession, task_in: TaskCreate, creator_id: int) -> Task:
+async def create_task(db: AsyncSession, task_in: TaskCreate, creator: User) -> Task:
     """
-    Creates and assigns a task. Only accessible by Admins (checked at route level).
+    Creates and assigns a task.
+    Accessible by Admin OR any user who is the direct manager of the assigned_to employee.
     """
     # Verify assignee exists
     result = await db.execute(select(User).where(User.id == task_in.assigned_to))
@@ -21,9 +22,19 @@ async def create_task(db: AsyncSession, task_in: TaskCreate, creator_id: int) ->
     if not assignee:
         raise ResourceNotFoundException(f"Assigned user with ID {task_in.assigned_to} not found.")
 
-    # Optional business validation: Check if assignee is an employee
+    # Business validation: Check if assignee is an employee
     if assignee.role != UserRole.EMPLOYEE:
         raise BadRequestException("Tasks can only be assigned to users with the EMPLOYEE role.")
+
+    is_admin = (creator.role == UserRole.ADMIN)
+    is_direct_manager = (assignee.manager_id == creator.id)
+
+    if not (is_admin or is_direct_manager):
+        raise AuthorizationException("You do not have permission to assign tasks to this employee.")
+
+    # Defense-in-depth: Self-assignment via manager path blocked
+    if not is_admin and task_in.assigned_to == creator.id:
+        raise AuthorizationException("You cannot assign a task to yourself via the manager assignment path.")
 
     db_task = Task(
         title=task_in.title,
@@ -31,12 +42,49 @@ async def create_task(db: AsyncSession, task_in: TaskCreate, creator_id: int) ->
         priority=task_in.priority,
         due_date=task_in.due_date,
         assigned_to=task_in.assigned_to,
-        created_by=creator_id,
+        created_by=creator.id,
     )
     db.add(db_task)
     await db.commit()
     await db.refresh(db_task)
     return db_task
+
+
+async def get_team_tasks(
+    db: AsyncSession,
+    user: User,
+    status: TaskStatus | None = None,
+    priority: TaskPriority | None = None,
+    sort_by: str | None = None,
+    skip: int = 0,
+    limit: int = 10,
+) -> list[Task]:
+    """
+    Lists tasks assigned to any of the current user's direct reports.
+    Returns an empty list if the user has no direct reports.
+    """
+    reports_stmt = select(User.id).where(User.manager_id == user.id)
+    reports_res = await db.execute(reports_stmt)
+    report_ids = reports_res.scalars().all()
+
+    if not report_ids:
+        return []
+
+    stmt = select(Task).where(Task.assigned_to.in_(report_ids))
+
+    if status:
+        stmt = stmt.where(Task.status == status)
+    if priority:
+        stmt = stmt.where(Task.priority == priority)
+
+    if sort_by and hasattr(Task, sort_by):
+        stmt = stmt.order_by(getattr(Task, sort_by).asc())
+    else:
+        stmt = stmt.order_by(Task.created_at.desc())
+
+    stmt = stmt.offset(skip).limit(limit)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
 
 
 async def get_tasks(

@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import (
     AuthenticationException,
     InvalidCredentialsException,
-    UserAlreadyExistsException,
 )
 from app.core.security import (
     create_access_token,
@@ -14,40 +13,37 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
-from app.models.user import User, UserRole
-from app.schemas.user import UserCreate, UserLogin
-
-
-async def register_user(db: AsyncSession, user_in: UserCreate) -> User:
-    """
-    Registers a new user. Default role is EMPLOYEE.
-    """
-    result = await db.execute(select(User).where(User.email == user_in.email))
-    existing_user = result.scalar_one_or_none()
-    if existing_user:
-        raise UserAlreadyExistsException("A user with this email already exists.")
-
-    hashed_pwd = hash_password(user_in.password)
-    db_user = User(
-        full_name=user_in.full_name,
-        email=user_in.email,
-        hashed_password=hashed_pwd,
-        role=UserRole.EMPLOYEE,
-    )
-    db.add(db_user)
-    await db.commit()
-    await db.refresh(db_user)
-    return db_user
+from app.models.user import User
+from app.schemas.user import PasswordChange, UserLogin
 
 
 async def authenticate_user(db: AsyncSession, login_in: UserLogin) -> User:
     """
-    Authenticates a user by checking email and verifying password.
+    Authenticates a user by checking employee_code and verifying password.
     """
-    result = await db.execute(select(User).where(User.email == login_in.email))
+    result = await db.execute(
+        select(User).where(User.employee_code == login_in.employee_code)
+    )
     user = result.scalar_one_or_none()
     if not user or not verify_password(login_in.password, user.hashed_password):
-        raise InvalidCredentialsException("Incorrect email or password.")
+        raise InvalidCredentialsException("Incorrect employee ID or password.")
+    return user
+
+
+async def change_password(
+    db: AsyncSession, user: User, pwd_in: PasswordChange
+) -> User:
+    """
+    Validates current password, updates user's password to new_password,
+    and clears must_change_password flag to False.
+    """
+    if not verify_password(pwd_in.current_password, user.hashed_password):
+        raise InvalidCredentialsException("Current password is incorrect.")
+
+    user.hashed_password = hash_password(pwd_in.new_password)
+    user.must_change_password = False
+    await db.commit()
+    await db.refresh(user)
     return user
 
 
@@ -75,3 +71,4 @@ async def refresh_access_token(db: AsyncSession, refresh_token: str) -> tuple[st
     new_access_token = create_access_token(email=user.email, role=user.role.value)
     new_refresh_token = create_refresh_token(email=user.email, role=user.role.value)
     return new_access_token, new_refresh_token
+

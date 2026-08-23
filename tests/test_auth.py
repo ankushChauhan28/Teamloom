@@ -14,51 +14,17 @@ from app.routes.auth import login, refresh, swagger_login
 from app.schemas.user import UserLogin
 
 
-@pytest.mark.asyncio
-async def test_register_user_success(client: AsyncClient) -> None:
-    """
-    Test registering a new user succeeds with HTTP 201 Created and default EMPLOYEE role.
-    """
-    payload = {
-        "email": "new.employee@example.com",
-        "full_name": "New Employee",
-        "password": "securepassword123",
-    }
-    response = await client.post("/auth/register", json=payload)
-    assert response.status_code == status.HTTP_201_CREATED
 
-    data = response.json()
-    assert data["email"] == payload["email"]
-    assert data["full_name"] == payload["full_name"]
-    assert data["role"] == "EMPLOYEE"
-    assert "id" in data
-    assert "password" not in data
-
-
-@pytest.mark.asyncio
-async def test_register_user_duplicate_email_fails(
-    client: AsyncClient, employee_user: User
-) -> None:
-    """
-    Test registering with an already existing email returns HTTP 400 Bad Request.
-    """
-    payload = {
-        "email": employee_user.email,
-        "full_name": "Duplicate User",
-        "password": "somepassword123",
-    }
-    response = await client.post("/auth/register", json=payload)
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert "already exists" in response.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
 async def test_login_user_success(client: AsyncClient, employee_user: User) -> None:
     """
-    Test valid user login returns access JWT token in JSON body and refresh token in httpOnly cookie.
+    Test valid user login with employee_code returns access JWT token, must_change_password=False,
+    and a fully populated user object in JSON body, and refresh token in httpOnly cookie.
     """
     payload = {
-        "email": employee_user.email,
+        "employee_code": employee_user.employee_code,
         "password": "employeepassword123",
     }
     response = await client.post("/auth/login", json=payload)
@@ -70,14 +36,71 @@ async def test_login_user_success(client: AsyncClient, employee_user: User) -> N
     assert data["token_type"] == "bearer"
     assert "refresh_token" in response.cookies
 
+    # Assert must_change_password flag and populated user object shape
+    assert data["must_change_password"] is False
+    assert "user" in data and data["user"] is not None
+    user_data = data["user"]
+    assert user_data["id"] == employee_user.id
+    assert user_data["email"] == employee_user.email
+    assert user_data["full_name"] == employee_user.full_name
+    assert user_data["role"] == employee_user.role.value
+    assert user_data["employee_code"] == employee_user.employee_code
+    assert user_data["must_change_password"] is False
+    assert "created_at" in user_data
+
+
+@pytest.mark.asyncio
+async def test_login_pending_password_change_user_returns_true_flag(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """
+    Test logging in as a user with must_change_password=True using employee_code
+    returns must_change_password=True and a fully populated user object in the login response body.
+    """
+    from unittest.mock import patch
+
+    captured_passwords = []
+
+    def mock_send_email(email, full_name, employee_code, temp_password):
+        captured_passwords.append(temp_password)
+        return True
+
+    with patch("app.services.user_service.send_employee_welcome_email", side_effect=mock_send_email):
+        create_res = await client.post(
+            "/users/employees",
+            json={"full_name": "Pending Pwd User", "email": "pending.pwd@example.com"},
+            headers=admin_headers,
+        )
+        assert create_res.status_code == status.HTTP_201_CREATED
+        temp_pwd = captured_passwords[0]
+        emp_code = create_res.json()["employee_code"]
+
+    login_res = await client.post(
+        "/auth/login",
+        json={"employee_code": emp_code, "password": temp_pwd},
+    )
+    assert login_res.status_code == status.HTTP_200_OK
+    data = login_res.json()
+
+    assert data["must_change_password"] is True
+    assert "user" in data and data["user"] is not None
+
+    user_data = data["user"]
+    assert user_data["email"] == "pending.pwd@example.com"
+    assert user_data["full_name"] == "Pending Pwd User"
+    assert user_data["role"] == "EMPLOYEE"
+    assert user_data["employee_code"] == emp_code
+    assert user_data["must_change_password"] is True
+    assert "created_at" in user_data
+
 
 @pytest.mark.asyncio
 async def test_swagger_login_success(client: AsyncClient, employee_user: User) -> None:
     """
-    Test form-data login endpoint (/auth/swagger-login) returns access token and sets cookie.
+    Test form-data login endpoint (/auth/swagger-login) with employee_code username returns access token.
     """
     data = {
-        "username": employee_user.email,
+        "username": employee_user.employee_code,
         "password": "employeepassword123",
     }
     response = await client.post("/auth/swagger-login", data=data)
@@ -93,28 +116,45 @@ async def test_login_with_wrong_password_returns_401(
     client: AsyncClient, employee_user: User
 ) -> None:
     """
-    Test login with incorrect password returns HTTP 401 Unauthorized.
+    Test login with valid employee_code but incorrect password returns HTTP 401 with generic error message.
     """
     payload = {
-        "email": employee_user.email,
+        "employee_code": employee_user.employee_code,
         "password": "wrongpassword!",
     }
     response = await client.post("/auth/login", json=payload)
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
-    assert "incorrect email or password" in response.json()["detail"].lower()
+    assert response.json()["detail"] == "Incorrect employee ID or password."
 
 
 @pytest.mark.asyncio
 async def test_login_nonexistent_user_returns_401(client: AsyncClient) -> None:
     """
-    Test login with an unregistered email returns HTTP 401 Unauthorized.
+    Test login with a non-existent employee_code returns HTTP 401 with generic error message.
     """
     payload = {
-        "email": "nonexistent@example.com",
+        "employee_code": "EMP-9999",
         "password": "somepassword123",
     }
     response = await client.post("/auth/login", json=payload)
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    assert response.json()["detail"] == "Incorrect employee ID or password."
+
+
+@pytest.mark.asyncio
+async def test_login_with_email_in_employee_code_field_fails_cleanly(
+    client: AsyncClient, employee_user: User
+) -> None:
+    """
+    Test passing an email address in the employee_code field fails cleanly with HTTP 401 generic error.
+    """
+    payload = {
+        "employee_code": employee_user.email,
+        "password": "employeepassword123",
+    }
+    response = await client.post("/auth/login", json=payload)
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    assert response.json()["detail"] == "Incorrect employee ID or password."
 
 
 @pytest.mark.asyncio
@@ -124,7 +164,7 @@ async def test_refresh_token_success(client: AsyncClient, employee_user: User) -
     """
     login_res = await client.post(
         "/auth/login",
-        json={"email": employee_user.email, "password": "employeepassword123"},
+        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
     )
     assert login_res.status_code == status.HTTP_200_OK
     assert "refresh_token" in client.cookies
@@ -181,7 +221,7 @@ async def test_logout_user_success(client: AsyncClient, employee_user: User) -> 
     """
     await client.post(
         "/auth/login",
-        json={"email": employee_user.email, "password": "employeepassword123"},
+        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
     )
     assert "refresh_token" in client.cookies
 
@@ -198,12 +238,12 @@ async def test_unit_direct_auth_routes_execution(
     Direct unit test calling route handlers asynchronously for complete coverage tracing.
     """
     response = Response()
-    login_in = UserLogin(email=employee_user.email, password="employeepassword123")
+    login_in = UserLogin(employee_code=employee_user.employee_code, password="employeepassword123")
     res_login = await login(login_in=login_in, response=response, db=db_session)
     assert res_login.access_token is not None
 
     class FormStub:
-        username = employee_user.email
+        username = employee_user.employee_code
         password = "employeepassword123"
 
     res_swagger = await swagger_login(

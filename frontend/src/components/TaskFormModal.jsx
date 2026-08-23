@@ -8,7 +8,7 @@ import { Button } from './ui/Button';
 import { Alert } from './ui/Alert';
 import { Spinner } from './ui/Spinner';
 
-export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null }) {
+export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null, assignableEmployees = null }) {
   const isEditMode = Boolean(editingTask);
 
   const [title, setTitle] = useState('');
@@ -24,9 +24,15 @@ export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null }
   const [serverError, setServerError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Fetch employee list for assignment dropdown
+  // Fetch employee list for assignment dropdown or use provided assignableEmployees
   useEffect(() => {
     if (!isOpen) return;
+
+    if (assignableEmployees && Array.isArray(assignableEmployees)) {
+      setEmployees(assignableEmployees);
+      setIsLoadingEmployees(false);
+      return;
+    }
 
     const fetchEmployees = async () => {
       setIsLoadingEmployees(true);
@@ -41,7 +47,7 @@ export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null }
     };
 
     fetchEmployees();
-  }, [isOpen]);
+  }, [isOpen, assignableEmployees]);
 
   // Populate or reset form fields when modal opens or editingTask changes
   useEffect(() => {
@@ -115,10 +121,12 @@ export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null }
     }
   };
 
-  const employeeOptions = employees.map((emp) => ({
-    value: String(emp.id),
-    label: `${emp.full_name} (${emp.email})`,
-  }));
+  const employeeOptions = employees
+    .filter((emp) => emp.role === 'EMPLOYEE')
+    .map((emp) => ({
+      value: String(emp.id),
+      label: `${emp.full_name} (${emp.employee_code || emp.email})`,
+    }));
 
   return (
     <Modal

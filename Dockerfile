@@ -47,7 +47,7 @@ RUN addgroup --system --gid 1001 appgroup && \
 COPY app/ /app/app/
 COPY alembic/ /app/alembic/
 COPY alembic.ini /app/
-COPY seed_admin.py /app/
+COPY scripts/ /app/scripts/
 COPY docker-entrypoint.sh /app/
 
 # Set executable permissions on entrypoint script and grant ownership to appuser

@@ -28,7 +28,7 @@ async def test_employee_cannot_create_task(
     }
     response = await client.post("/tasks/", json=payload, headers=employee_headers)
     assert response.status_code == status.HTTP_403_FORBIDDEN
-    assert "action requires admin role" in response.json()["detail"].lower()
+    assert "permission" in response.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
@@ -94,3 +94,45 @@ async def test_employee_cannot_review_leave(
         headers=employee_headers,
     )
     assert rev_res.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.asyncio
+async def test_employee_cannot_set_manager(
+    client: AsyncClient,
+    employee_headers: dict[str, str],
+    employee_user: User,
+    admin_user: User,
+) -> None:
+    """
+    Test Employee attempting to set/change any user's manager_id (`PATCH /users/{user_id}/manager`)
+    returns HTTP 403 Forbidden.
+    """
+    res = await client.patch(
+        f"/users/{employee_user.id}/manager",
+        json={"manager_id": admin_user.id},
+        headers=employee_headers,
+    )
+    assert res.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.asyncio
+async def test_employee_cannot_bypass_manager_id_via_update_me(
+    client: AsyncClient,
+    employee_headers: dict[str, str],
+    employee_user: User,
+    admin_user: User,
+) -> None:
+    """
+    Test an EMPLOYEE attempting to pass `manager_id` to `PATCH /users/me` fails to mutate `manager_id`.
+    The `UserUpdate` schema excludes `manager_id`, ensuring it is ignored/not applied.
+    """
+    payload = {"full_name": "Updated Employee Name", "manager_id": admin_user.id}
+    response = await client.patch("/users/me", json=payload, headers=employee_headers)
+    assert response.status_code == status.HTTP_200_OK
+
+    data = response.json()
+    assert data["full_name"] == "Updated Employee Name"
+    # Ensure manager_id remained None and was not mutated via self-update
+    assert data["manager_id"] is None
+
+

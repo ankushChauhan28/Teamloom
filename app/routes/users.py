@@ -1,27 +1,45 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_current_user, require_role
+from app.core.security import get_current_user, require_password_change_cleared, require_role
 from app.db.session import get_db
 from app.models.user import User, UserRole
-from app.schemas.user import UserRead, UserUpdate
+from app.schemas.user import (
+    EmployeeCreate,
+    EmployeeCreateResponse,
+    UserManagerUpdate,
+    UserRead,
+    UserUpdate,
+)
 from app.services import user_service
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
 
 @router.get("/me", response_model=UserRead)
-async def get_me(current_user: User = Depends(get_current_user)):
+async def get_me(current_user: User = Depends(require_password_change_cleared)):
     """
     Retrieve the current logged-in user's profile.
     """
     return current_user
 
 
+@router.get("/me/reports", response_model=list[UserRead])
+async def get_my_direct_reports(
+    current_user: User = Depends(require_password_change_cleared),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Retrieves the list of direct report employees managed by the current user.
+    Returns an empty list if the user has no direct reports.
+    """
+    return await user_service.get_user_direct_reports(db=db, user_id=current_user.id)
+
+
 @router.patch("/me", response_model=UserRead)
 async def update_me(
     user_update: UserUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_password_change_cleared),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -42,3 +60,63 @@ async def list_employees(
     List all employees in the system. Accessible by Admin only.
     """
     return await user_service.get_employees(db=db)
+
+
+@router.post("/employees", response_model=EmployeeCreateResponse, status_code=status.HTTP_201_CREATED)
+async def create_employee(
+    employee_in: EmployeeCreate,
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(require_role(UserRole.ADMIN)),
+):
+    """
+    Add a new employee account. Accessible by Admin only.
+    Generates employee_code, temporary password, and sends welcome email.
+    Never returns plaintext password in API response.
+    """
+    new_user, email_sent = await user_service.create_employee(
+        db=db, employee_in=employee_in
+    )
+    return EmployeeCreateResponse(
+        id=new_user.id,
+        full_name=new_user.full_name,
+        email=new_user.email,
+        employee_code=new_user.employee_code,
+        role=new_user.role,
+        manager_id=new_user.manager_id,
+        must_change_password=new_user.must_change_password,
+        created_at=new_user.created_at,
+        email_sent=email_sent,
+    )
+
+
+@router.post("/{user_id}/reset-temp-password")
+async def reset_employee_temp_password(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(require_role(UserRole.ADMIN)),
+):
+    """
+    Resets an employee's password to a new temporary password and resends email.
+    Accessible by Admin only.
+    """
+    user, email_sent = await user_service.reset_employee_temp_password(
+        db=db, target_user_id=user_id
+    )
+    return {"id": user.id, "email_sent": email_sent}
+
+
+@router.patch("/{user_id}/manager", response_model=UserRead)
+async def set_user_manager(
+    user_id: int,
+    manager_in: UserManagerUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(require_role(UserRole.ADMIN)),
+):
+    """
+    Set or update a user's manager. Accessible by Admin only.
+    """
+    return await user_service.set_user_manager(
+        db=db, target_user_id=user_id, manager_id=manager_in.manager_id
+    )
+
+

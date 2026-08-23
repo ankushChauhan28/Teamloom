@@ -25,6 +25,8 @@ from app.db.session import get_db
 from app.main import app
 from app.models.user import User, UserRole
 
+from unittest.mock import MagicMock, patch
+
 # In-memory SQLite async database for testing
 SQLALCHEMY_TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -41,6 +43,23 @@ TestingSessionLocal = async_sessionmaker(
     autoflush=False,
     expire_on_commit=False,
 )
+
+
+@pytest.fixture(autouse=True)
+def mock_send_welcome_email() -> AsyncGenerator[MagicMock, None]:
+    """
+    Autouse Fixture (Scope: Function):
+    Automatically mocks send_employee_welcome_email for ALL tests in the suite
+    so no real SMTP network connections are ever attempted during pytest execution.
+    """
+    with patch(
+        "app.services.user_service.send_employee_welcome_email",
+        return_value=True,
+    ) as mock_service_email, patch(
+        "app.core.email.send_employee_welcome_email",
+        return_value=True,
+    ):
+        yield mock_service_email
 
 
 @pytest.fixture(scope="function")
@@ -84,6 +103,8 @@ async def admin_user(db_session: AsyncSession) -> User:
         email="admin.test@example.com",
         hashed_password=hash_password("adminpassword123"),
         role=UserRole.ADMIN,
+        employee_code="EMP-0001",
+        must_change_password=False,
     )
     db_session.add(admin)
     await db_session.commit()
@@ -101,6 +122,8 @@ async def employee_user(db_session: AsyncSession) -> User:
         email="employee.test@example.com",
         hashed_password=hash_password("employeepassword123"),
         role=UserRole.EMPLOYEE,
+        employee_code="EMP-0002",
+        must_change_password=False,
     )
     db_session.add(employee)
     await db_session.commit()

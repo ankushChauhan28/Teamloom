@@ -3,8 +3,8 @@ import { Navigate, Outlet } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
 import { Spinner } from '../ui/Spinner';
 
-export function ProtectedRoute({ children }) {
-  const { user, isAuthenticated, isLoading } = useAuthStore();
+export function ManagerRoute({ children }) {
+  const { user, isAuthenticated, isLoading, directReports } = useAuthStore();
 
   if (isLoading) {
     return (
@@ -22,7 +22,12 @@ export function ProtectedRoute({ children }) {
     return <Navigate to="/change-password" replace />;
   }
 
+  const hasReports = (directReports || []).length > 0;
+  if (!hasReports) {
+    return <Navigate to={user?.role === 'ADMIN' ? '/admin/tasks' : '/dashboard'} replace />;
+  }
+
   return children ? children : <Outlet />;
 }
 
-export default ProtectedRoute;
+export default ManagerRoute;

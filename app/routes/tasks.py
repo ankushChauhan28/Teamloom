@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_current_user, require_role
+from app.core.security import get_current_user, require_password_change_cleared, require_role
 from app.db.session import get_db
 from app.models.task import TaskPriority, TaskStatus
 from app.models.user import User, UserRole
@@ -15,12 +15,38 @@ router = APIRouter(prefix="/tasks", tags=["Tasks"])
 async def create_task(
     task_in: TaskCreate,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_role(UserRole.ADMIN)),
+    current_user: User = Depends(require_password_change_cleared),
 ):
     """
-    Create a new task and assign it to an employee. Admin only.
+    Create a new task and assign it to an employee.
+    Accessible by Admin OR any user who is the direct manager of the target employee.
     """
-    return await task_service.create_task(db=db, task_in=task_in, creator_id=current_admin.id)
+    return await task_service.create_task(db=db, task_in=task_in, creator=current_user)
+
+
+@router.get("/team", response_model=list[TaskRead])
+async def list_team_tasks(
+    status: TaskStatus | None = None,
+    priority: TaskPriority | None = None,
+    sort_by: str | None = None,
+    skip: int = 0,
+    limit: int = 10,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_password_change_cleared),
+):
+    """
+    List tasks assigned to any of the current user's direct reports.
+    Returns an empty list if the user has no direct reports.
+    """
+    return await task_service.get_team_tasks(
+        db=db,
+        user=current_user,
+        status=status,
+        priority=priority,
+        sort_by=sort_by,
+        skip=skip,
+        limit=limit,
+    )
 
 
 @router.get("/", response_model=list[TaskRead])
@@ -31,7 +57,7 @@ async def list_tasks(
     skip: int = 0,
     limit: int = 10,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_password_change_cleared),
 ):
     """
     List tasks. Admin sees all tasks; Employee sees only their assigned tasks.
@@ -50,7 +76,9 @@ async def list_tasks(
 
 @router.get("/{id}", response_model=TaskRead)
 async def get_task(
-    id: int, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)
+    id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_password_change_cleared),
 ):
     """
     Retrieve details of a single task. Employees can only view their own tasks.
@@ -63,7 +91,7 @@ async def update_task(
     id: int,
     task_update: TaskUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_password_change_cleared),
 ):
     """
     Update a task. Admin can update any field.
