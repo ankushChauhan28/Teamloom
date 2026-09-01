@@ -6,7 +6,7 @@ import sys
 from sqlalchemy import select
 
 # Add parent directory to Python path to allow app imports
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Ensure all models are imported so SQLAlchemy mappers resolve relationships
 import app.models.leave  # noqa: F401
@@ -14,11 +14,12 @@ import app.models.task  # noqa: F401
 from app.core.security import hash_password
 from app.db.base import AsyncSessionLocal
 from app.models.user import User, UserRole
+from app.services.user_service import _generate_next_employee_code
 
 
 async def seed_admin():
     print("========================================")
-    print("   Employee Task Management - Seed Admin")
+    print("        Teamloom - Seed Admin")
     print("========================================")
 
     email = os.getenv("ADMIN_EMAIL")
@@ -35,7 +36,9 @@ async def seed_admin():
             result = await db.execute(select(User).where(User.email == email))
             existing_user = result.scalar_one_or_none()
             if existing_user:
-                print(f"\n[-] User with email '{email}' already exists. Role: {existing_user.role.value}")
+                print(
+                    f"\n[-] User with email '{email}' already exists. Role: {existing_user.role.value}, Employee ID: {existing_user.employee_code}"
+                )
                 return
 
             if not password:
@@ -49,17 +52,21 @@ async def seed_admin():
                     print("\n[-] Error: Passwords do not match.")
                     return
 
+            emp_code = await _generate_next_employee_code(db)
             hashed_password = hash_password(password)
             admin = User(
                 full_name=full_name,
                 email=email,
                 hashed_password=hashed_password,
                 role=UserRole.ADMIN,
+                employee_code=emp_code,
+                must_change_password=False,
             )
             db.add(admin)
             await db.commit()
             await db.refresh(admin)
             print(f"\n[+] Success: Admin user '{full_name}' ({email}) created successfully!")
+            print(f"    Employee ID: {admin.employee_code}")
 
         except Exception as e:
             print(f"\n[-] An unexpected error occurred: {e}")

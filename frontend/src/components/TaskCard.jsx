@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { Calendar, Clock, AlertTriangle } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import { Card } from './ui/Card';
 import { Badge } from './ui/Badge';
 import { Select } from './ui/Select';
 import { Spinner } from './ui/Spinner';
-import { getRelativeDueDateInfo } from '../lib/dateUtils';
+import { DueCountdown } from './ui/DueCountdown';
 
 // Priority Enum -> Badge Variant & Label mapping
 const PRIORITY_MAP = {
@@ -26,8 +26,6 @@ export function TaskCard({ task, onStatusChange }) {
 
   const priorityInfo = PRIORITY_MAP[task.priority] || { variant: 'slate', label: task.priority };
   const statusInfo = STATUS_MAP[task.status] || { variant: 'slate', label: task.status };
-
-  const dueDateInfo = getRelativeDueDateInfo(task.due_date);
 
   const handleStatusSelect = async (e) => {
     const newStatus = e.target.value;
@@ -64,21 +62,8 @@ export function TaskCard({ task, onStatusChange }) {
 
       {/* Due Date & Current Status Badge */}
       <div className="flex items-center justify-between text-xs pt-1 border-t border-[var(--border)]">
-        {/* Relative Due Date Countdown */}
-        <div className="flex items-center gap-1.5">
-          <Calendar
-            className={`w-3.5 h-3.5 ${
-              dueDateInfo.isOverdue ? 'text-[var(--red)]' : 'text-[var(--text-secondary)]'
-            }`}
-          />
-          <span
-            className={`font-medium text-[11px] ${
-              dueDateInfo.isOverdue ? 'text-[var(--red)]' : 'text-[var(--text-secondary)]'
-            }`}
-          >
-            {dueDateInfo.label}
-          </span>
-        </div>
+        {/* Live Due Countdown Component */}
+        <DueCountdown dueDatetime={task.due_datetime || task.due_date} status={task.status} />
 
         {/* Current Status Badge */}
         <Badge variant={statusInfo.variant} size="sm">

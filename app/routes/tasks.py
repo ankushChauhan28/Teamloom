@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_current_user, require_password_change_cleared, require_role
+from app.core.security import require_password_change_cleared, require_role
 from app.db.session import get_db
 from app.models.task import TaskPriority, TaskStatus
 from app.models.user import User, UserRole

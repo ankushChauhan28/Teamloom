@@ -25,7 +25,7 @@ select = [
     "I",   # isort (import sorting)
     "UP",  # pyupgrade
 ]
-ignore = []
+ignore = ["E501", "UP042"]
 
 [tool.mypy]
 python_version = "3.12"

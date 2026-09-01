@@ -1,14 +1,14 @@
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_current_user, require_password_change_cleared, require_role
+from app.core.security import require_password_change_cleared, require_role
 from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.schemas.user import (
     EmployeeCreate,
     EmployeeCreateResponse,
-    UserManagerUpdate,
     UserRead,
+    UserReportsToUpdate,
     UserUpdate,
 )
 from app.services import user_service
@@ -44,11 +44,9 @@ async def update_me(
 ):
     """
     Update the basic profile details of the current logged-in user.
-    Only allows updating non-sensitive fields (like full_name).
+    Only allows updating non-sensitive fields (like full_name, designation).
     """
-    return await user_service.update_user_profile(
-        db=db, user=current_user, user_update=user_update
-    )
+    return await user_service.update_user_profile(db=db, user=current_user, user_update=user_update)
 
 
 @router.get("/", response_model=list[UserRead])
@@ -62,7 +60,9 @@ async def list_employees(
     return await user_service.get_employees(db=db)
 
 
-@router.post("/employees", response_model=EmployeeCreateResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/employees", response_model=EmployeeCreateResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_employee(
     employee_in: EmployeeCreate,
     db: AsyncSession = Depends(get_db),
@@ -73,16 +73,15 @@ async def create_employee(
     Generates employee_code, temporary password, and sends welcome email.
     Never returns plaintext password in API response.
     """
-    new_user, email_sent = await user_service.create_employee(
-        db=db, employee_in=employee_in
-    )
+    new_user, email_sent = await user_service.create_employee(db=db, employee_in=employee_in)
     return EmployeeCreateResponse(
         id=new_user.id,
         full_name=new_user.full_name,
         email=new_user.email,
         employee_code=new_user.employee_code,
         role=new_user.role,
-        manager_id=new_user.manager_id,
+        reports_to_id=new_user.reports_to_id,
+        designation=new_user.designation,
         must_change_password=new_user.must_change_password,
         created_at=new_user.created_at,
         email_sent=email_sent,
@@ -105,18 +104,16 @@ async def reset_employee_temp_password(
     return {"id": user.id, "email_sent": email_sent}
 
 
-@router.patch("/{user_id}/manager", response_model=UserRead)
-async def set_user_manager(
+@router.patch("/{user_id}/reports-to", response_model=UserRead)
+async def set_user_reports_to(
     user_id: int,
-    manager_in: UserManagerUpdate,
+    reports_to_in: UserReportsToUpdate,
     db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(require_role(UserRole.ADMIN)),
 ):
     """
-    Set or update a user's manager. Accessible by Admin only.
+    Set or update a user's reports-to supervisor. Accessible by Admin only.
     """
-    return await user_service.set_user_manager(
-        db=db, target_user_id=user_id, manager_id=manager_in.manager_id
+    return await user_service.set_user_reports_to(
+        db=db, target_user_id=user_id, reports_to_id=reports_to_in.reports_to_id
     )
-
-

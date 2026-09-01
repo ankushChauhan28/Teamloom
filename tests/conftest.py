@@ -13,6 +13,7 @@ EDUCATIONAL EXPLANATION - ASYNC TEST FIXTURES & ASGI TRANSPORT:
 """
 
 from collections.abc import AsyncGenerator
+from unittest.mock import MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -24,8 +25,6 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models.user import User, UserRole
-
-from unittest.mock import MagicMock, patch
 
 # In-memory SQLite async database for testing
 SQLALCHEMY_TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -52,14 +51,30 @@ def mock_send_welcome_email() -> AsyncGenerator[MagicMock, None]:
     Automatically mocks send_employee_welcome_email for ALL tests in the suite
     so no real SMTP network connections are ever attempted during pytest execution.
     """
-    with patch(
-        "app.services.user_service.send_employee_welcome_email",
-        return_value=True,
-    ) as mock_service_email, patch(
-        "app.core.email.send_employee_welcome_email",
-        return_value=True,
+    with (
+        patch(
+            "app.services.user_service.send_employee_welcome_email",
+            return_value=True,
+        ) as mock_service_email,
+        patch(
+            "app.core.email.send_employee_welcome_email",
+            return_value=True,
+        ),
     ):
         yield mock_service_email
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiter():
+    """
+    Autouse Fixture (Scope: Function):
+    Resets the in-memory rate limiter state before every test to ensure test isolation.
+    """
+    from app.core.rate_limit import _limiter_instance
+
+    _limiter_instance.reset()
+    yield
+    _limiter_instance.reset()
 
 
 @pytest.fixture(scope="function")

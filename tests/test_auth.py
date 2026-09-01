@@ -3,6 +3,7 @@ Integration & Unit Tests for Authentication Endpoints (/auth/)
 """
 
 from datetime import timedelta
+
 import pytest
 from fastapi import Request, Response, status
 from httpx import AsyncClient
@@ -12,9 +13,6 @@ from app.core.security import create_refresh_token
 from app.models.user import User
 from app.routes.auth import login, refresh, swagger_login
 from app.schemas.user import UserLogin
-
-
-
 
 
 @pytest.mark.asyncio
@@ -65,7 +63,9 @@ async def test_login_pending_password_change_user_returns_true_flag(
         captured_passwords.append(temp_password)
         return True
 
-    with patch("app.services.user_service.send_employee_welcome_email", side_effect=mock_send_email):
+    with patch(
+        "app.services.user_service.send_employee_welcome_email", side_effect=mock_send_email
+    ):
         create_res = await client.post(
             "/users/employees",
             json={"full_name": "Pending Pwd User", "email": "pending.pwd@example.com"},
@@ -237,9 +237,10 @@ async def test_unit_direct_auth_routes_execution(
     """
     Direct unit test calling route handlers asynchronously for complete coverage tracing.
     """
+    req = Request({"type": "http", "headers": [], "client": ("127.0.0.1", 12345)})
     response = Response()
     login_in = UserLogin(employee_code=employee_user.employee_code, password="employeepassword123")
-    res_login = await login(login_in=login_in, response=response, db=db_session)
+    res_login = await login(login_in=login_in, request=req, response=response, db=db_session)
     assert res_login.access_token is not None
 
     class FormStub:
@@ -247,13 +248,11 @@ async def test_unit_direct_auth_routes_execution(
         password = "employeepassword123"
 
     res_swagger = await swagger_login(
-        response=response, form_data=FormStub(), db=db_session
+        request=req, response=response, form_data=FormStub(), db=db_session
     )
     assert res_swagger.access_token is not None
 
-    cookie_token = create_refresh_token(
-        email=employee_user.email, role=employee_user.role.value
-    )
+    cookie_token = create_refresh_token(email=employee_user.email, role=employee_user.role.value)
     req = Request(
         {"type": "http", "headers": [(b"cookie", f"refresh_token={cookie_token}".encode())]}
     )

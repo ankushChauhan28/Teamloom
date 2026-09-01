@@ -10,8 +10,9 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { Alert } from '../components/ui/Alert';
 import { TaskFormModal } from '../components/TaskFormModal';
 import { TaskDeleteModal } from '../components/TaskDeleteModal';
+import { DueCountdown } from '../components/ui/DueCountdown';
 import { Plus, Edit3, Trash2, CheckSquare, RefreshCw, Filter } from 'lucide-react';
-import { getRelativeDueDateInfo } from '../lib/dateUtils';
+
 
 // Priority Enum -> Badge Variant & Label mapping
 const PRIORITY_MAP = {
@@ -214,15 +215,11 @@ export function AdminTasksPage() {
               title="No tasks found"
               description={
                 tasks.length === 0
-                  ? "No tasks have been created in the system yet. Click 'New Task' to assign the first task."
+                  ? "No tasks have been created in the system yet. Click 'New Task' above to assign the first one."
                   : "No system tasks match your selected status, priority, or employee filter criteria."
               }
               action={
-                tasks.length === 0 ? (
-                  <Button variant="primary" size="sm" onClick={handleOpenCreateModal}>
-                    <Plus className="w-3.5 h-3.5 mr-1.5" /> Create First Task
-                  </Button>
-                ) : (
+                tasks.length === 0 ? null : (
                   <Button
                     variant="secondary"
                     size="sm"
@@ -258,7 +255,6 @@ export function AdminTasksPage() {
                     const assignee = employeeMap[task.assigned_to];
                     const priorityInfo = PRIORITY_MAP[task.priority] || { variant: 'slate', label: task.priority };
                     const statusInfo = STATUS_MAP[task.status] || { variant: 'slate', label: task.status };
-                    const dueDateInfo = getRelativeDueDateInfo(task.due_date);
 
                     return (
                       <tr
@@ -309,20 +305,9 @@ export function AdminTasksPage() {
                           </Badge>
                         </td>
 
-                        {/* Due Date */}
+                        {/* Due Date & Time Countdown */}
                         <td className="py-3 px-4 whitespace-nowrap">
-                          <div className="flex flex-col">
-                            <span className="text-[var(--text-primary)]">
-                              {task.due_date}
-                            </span>
-                            <span
-                              className={`text-[10px] font-medium ${
-                                dueDateInfo.isOverdue ? 'text-[var(--red)]' : 'text-[var(--text-muted)]'
-                              }`}
-                            >
-                              {dueDateInfo.label}
-                            </span>
-                          </div>
+                          <DueCountdown dueDatetime={task.due_datetime || task.due_date} status={task.status} />
                         </td>
 
                         {/* Actions (Edit / Delete) */}

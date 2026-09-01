@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../lib/api';
+import { formatToDatetimeLocal } from '../lib/dateUtils';
 import { Modal } from './ui/Modal';
 import { Input } from './ui/Input';
 import { Textarea } from './ui/Textarea';
@@ -15,7 +16,7 @@ export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null, 
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState('MEDIUM');
   const [status, setStatus] = useState('PENDING');
-  const [dueDate, setDueDate] = useState('');
+  const [dueDatetime, setDueDatetime] = useState('');
   const [assignedTo, setAssignedTo] = useState('');
 
   const [employees, setEmployees] = useState([]);
@@ -56,14 +57,18 @@ export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null, 
       setDescription(editingTask.description || '');
       setPriority(editingTask.priority || 'MEDIUM');
       setStatus(editingTask.status || 'PENDING');
-      setDueDate(editingTask.due_date || '');
+      setDueDatetime(formatToDatetimeLocal(editingTask.due_datetime || editingTask.due_date));
       setAssignedTo(editingTask.assigned_to ? String(editingTask.assigned_to) : '');
     } else {
       setTitle('');
       setDescription('');
       setPriority('MEDIUM');
       setStatus('PENDING');
-      setDueDate('');
+      // Default to tomorrow 17:00 local time for new tasks
+      const defaultDue = new Date();
+      defaultDue.setDate(defaultDue.getDate() + 1);
+      defaultDue.setHours(17, 0, 0, 0);
+      setDueDatetime(formatToDatetimeLocal(defaultDue));
       setAssignedTo('');
     }
     setErrors({});
@@ -76,8 +81,8 @@ export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null, 
       newErrors.title = 'Title is required.';
     }
 
-    if (!dueDate) {
-      newErrors.dueDate = 'Due date is required.';
+    if (!dueDatetime) {
+      newErrors.dueDatetime = 'Due date and time are required.';
     }
 
     if (!assignedTo) {
@@ -96,11 +101,14 @@ export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null, 
 
     setIsSubmitting(true);
     try {
+      // Convert local datetime input value to ISO string for backend
+      const isoDatetime = new Date(dueDatetime).toISOString();
+
       const payload = {
         title: title.trim(),
         description: description.trim(),
         priority,
-        due_date: dueDate,
+        due_datetime: isoDatetime,
         assigned_to: Number(assignedTo),
       };
 
@@ -123,10 +131,14 @@ export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null, 
 
   const employeeOptions = employees
     .filter((emp) => emp.role === 'EMPLOYEE')
-    .map((emp) => ({
-      value: String(emp.id),
-      label: `${emp.full_name} (${emp.employee_code || emp.email})`,
-    }));
+    .map((emp) => {
+      const codeOrEmail = emp.employee_code || emp.email;
+      const desigSuffix = emp.designation ? ` — ${emp.designation}` : '';
+      return {
+        value: String(emp.id),
+        label: `${emp.full_name} (${codeOrEmail})${desigSuffix}`,
+      };
+    });
 
   return (
     <Modal
@@ -195,14 +207,14 @@ export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null, 
           />
 
           <Input
-            label="Due date"
-            type="date"
-            value={dueDate}
+            label="Due date & time"
+            type="datetime-local"
+            value={dueDatetime}
             onChange={(e) => {
-              setDueDate(e.target.value);
-              if (errors.dueDate) setErrors({ ...errors, dueDate: '' });
+              setDueDatetime(e.target.value);
+              if (errors.dueDatetime) setErrors({ ...errors, dueDatetime: '' });
             }}
-            error={errors.dueDate}
+            error={errors.dueDatetime}
             disabled={isSubmitting}
           />
         </div>

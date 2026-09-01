@@ -105,17 +105,13 @@ export const useAuthStore = create((set, get) => ({
   },
 
   refreshSession: async () => {
-    console.log('[authStore] Starting refreshSession()...');
     set({ isLoading: true });
     try {
       // 1. Silent refresh call using httpOnly cookie
-      console.log('[authStore] Sending POST /auth/refresh...');
       const refreshRes = await api.post('/auth/refresh');
-      console.log('[authStore] POST /auth/refresh response received:', refreshRes.data);
       const token = refreshRes.data.access_token;
 
       if (!token) {
-        console.log('[authStore] No token returned in refresh response, clearing auth');
         get().clearAuth();
         return false;
       }
@@ -123,10 +119,8 @@ export const useAuthStore = create((set, get) => ({
       set({ accessToken: token });
 
       // 2. Fetch authenticated user profile
-      console.log('[authStore] Fetching GET /users/me...');
       try {
         const userRes = await api.get('/users/me');
-        console.log('[authStore] GET /users/me user profile:', userRes.data);
         const userData = userRes.data;
 
         set({
@@ -143,7 +137,6 @@ export const useAuthStore = create((set, get) => ({
         return true;
       } catch (userErr) {
         if (userErr.response?.data?.detail === 'password_change_required') {
-          console.log('[authStore] User must change password before accessing profile');
           set({
             user: { must_change_password: true },
             accessToken: token,

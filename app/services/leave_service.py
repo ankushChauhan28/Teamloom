@@ -82,7 +82,7 @@ async def get_team_leave_requests(
     Lists leave requests submitted by any of the current user's direct reports.
     Defaults to PENDING status first. Returns an empty list if the user has no direct reports.
     """
-    reports_stmt = select(User.id).where(User.manager_id == user.id)
+    reports_stmt = select(User.id).where(User.reports_to_id == user.id)
     reports_res = await db.execute(reports_stmt)
     report_ids = reports_res.scalars().all()
 
@@ -130,12 +130,12 @@ async def review_leave_request(
     if db_leave.employee_id == reviewer.id:
         raise AuthorizationException("You cannot approve or reject your own leave request.")
 
-    # Fetch applicant employee to check manager_id
+    # Fetch applicant employee to check reports_to_id
     res_emp = await db.execute(select(User).where(User.id == db_leave.employee_id))
     applicant = res_emp.scalar_one_or_none()
 
-    is_admin = (reviewer.role == UserRole.ADMIN)
-    is_direct_manager = (applicant is not None and applicant.manager_id == reviewer.id)
+    is_admin = reviewer.role == UserRole.ADMIN
+    is_direct_manager = applicant is not None and applicant.reports_to_id == reviewer.id
 
     if not (is_admin or is_direct_manager):
         raise AuthorizationException("You do not have permission to review this leave request.")

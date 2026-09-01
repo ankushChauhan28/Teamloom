@@ -12,10 +12,10 @@ from app.core.exceptions import (
     ResourceNotFoundException,
     UserAlreadyExistsException,
 )
-from app.routes import auth, leaves, tasks, users
+from app.routes import analytics, auth, leaves, tasks, users
 
 app = FastAPI(
-    title="Employee Task Management System API",
+    title="Teamloom API",
     description="A clean, modular FastAPI backend for portfolio and learning demonstration.",
     version="1.0.0",
 )
@@ -34,11 +34,12 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(tasks.router)
 app.include_router(leaves.router)
+app.include_router(analytics.router)
 
 
 @app.get("/")
 def read_root():
-    return {"message": "Welcome to the Employee Task Management System API", "docs_url": "/docs"}
+    return {"message": "Welcome to the Teamloom API", "docs_url": "/docs"}
 
 
 # Centralized Exception Handlers

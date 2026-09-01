@@ -12,16 +12,18 @@ class UserBase(BaseModel):
 
 class UserUpdate(BaseModel):
     full_name: str | None = None
+    designation: str | None = None
 
 
-class UserManagerUpdate(BaseModel):
-    manager_id: int | None = None
+class UserReportsToUpdate(BaseModel):
+    reports_to_id: int | None = None
 
 
 class EmployeeCreate(BaseModel):
     full_name: str
     email: EmailStr
-    manager_id: int | None = None
+    reports_to_id: int | None = None
+    designation: str | None = None
 
 
 class EmployeeCreateResponse(BaseModel):
@@ -32,7 +34,8 @@ class EmployeeCreateResponse(BaseModel):
     email: EmailStr
     employee_code: str
     role: UserRole
-    manager_id: int | None = None
+    reports_to_id: int | None = None
+    designation: str | None = None
     must_change_password: bool
     created_at: datetime
     email_sent: bool = False
@@ -55,7 +58,6 @@ class Token(BaseModel):
     user: "UserRead | None" = None
 
 
-
 class TokenRefresh(BaseModel):
     refresh_token: str
 
@@ -70,7 +72,8 @@ class UserRead(UserBase):
 
     id: int
     role: UserRole
-    manager_id: int | None = None
+    reports_to_id: int | None = None
+    designation: str | None = None
     employee_code: str | None = None
     must_change_password: bool = False
     created_at: datetime

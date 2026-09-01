@@ -1,4 +1,4 @@
-# Employee Task Management System
+# Teamloom
 
 An enterprise role-based internal task & leave management platform built with FastAPI, PostgreSQL, SQLAlchemy 2.0, and React 19 with Vite, Tailwind CSS v4, and Zustand. The application features fine-grained access control, `httpOnly` cookie-based JWT authentication, administrative control panels, employee self-service portals, and an enterprise dark design system ("Deep Pine").
 
@@ -30,7 +30,7 @@ An enterprise role-based internal task & leave management platform built with Fa
 ## Architecture & Project Structure
 
 ```text
-Employee Task Management/
+Teamloom/
 ├── app/                                       # FastAPI Backend Application
 │   ├── core/                                  # Security, JWT, exception handlers & environment config
 │   ├── db/                                    # Async SQLAlchemy engine & session dependency setup

@@ -155,4 +155,3 @@ async def require_password_change_cleared(
     if current_user.must_change_password:
         raise AuthorizationException("password_change_required")
     return current_user
-

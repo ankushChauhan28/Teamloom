@@ -59,3 +59,9 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+export const getPerformanceAnalytics = async (params = {}) => {
+  const response = await api.get('/analytics/performance', { params });
+  return response.data;
+};
+

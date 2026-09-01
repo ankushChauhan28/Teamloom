@@ -81,7 +81,7 @@ export function RegisterPage() {
           <CheckSquare className="w-5 h-5" />
         </div>
         <span className="text-lg font-semibold text-[var(--text-primary)] tracking-tight">
-          employee task management
+          Teamloom
         </span>
       </div>
 

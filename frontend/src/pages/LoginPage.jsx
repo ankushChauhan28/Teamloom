@@ -77,7 +77,7 @@ export function LoginPage() {
           <CheckSquare className="w-5 h-5" />
         </div>
         <span className="text-lg font-semibold text-[var(--text-primary)] tracking-tight">
-          employee task management
+          Teamloom
         </span>
       </div>
 
@@ -85,7 +85,7 @@ export function LoginPage() {
       <Card className="w-full max-w-md p-6">
         <div className="mb-6">
           <h1 className="text-xl font-semibold text-[var(--text-primary)] mb-1">
-            Sign in to your account
+            Login to your account
           </h1>
           <p className="text-xs text-[var(--text-secondary)]">
             Enter your credentials to access your dashboard
@@ -135,10 +135,10 @@ export function LoginPage() {
           >
             {isSubmitting ? (
               <span className="flex items-center gap-2">
-                <Spinner size="sm" /> Signing in...
+                <Spinner size="sm" /> Logging in...
               </span>
             ) : (
-              'Sign in'
+              'Login'
             )}
           </Button>
         </form>

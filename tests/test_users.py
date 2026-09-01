@@ -73,73 +73,78 @@ async def test_list_employees_by_admin(
     assert admin_user.id not in returned_ids, "ADMIN role user must be excluded from GET /users/"
 
     for item in data:
-        assert item["role"] == "EMPLOYEE", f"User #{item['id']} had role {item['role']}, expected EMPLOYEE"
+        assert (
+            item["role"] == "EMPLOYEE"
+        ), f"User #{item['id']} had role {item['role']}, expected EMPLOYEE"
 
 
 @pytest.mark.asyncio
-async def test_admin_set_user_manager_success(
+async def test_admin_set_user_reports_to_success(
     client: AsyncClient,
     admin_user: User,
     employee_user: User,
     admin_headers: dict[str, str],
 ) -> None:
     """
-    Test Admin can set a valid manager_id on a user via `PATCH /users/{user_id}/manager`.
+    Test Admin can set a valid reports_to_id on a user via `PATCH /users/{user_id}/reports-to`.
     """
-    # Verify initial manager_id is None
-    me_res = await client.get("/users/me", headers={"Authorization": f"Bearer {admin_headers['Authorization'].split(' ')[1]}"})
-    assert me_res.json()["manager_id"] is None
+    # Verify initial reports_to_id is None
+    me_res = await client.get(
+        "/users/me",
+        headers={"Authorization": f"Bearer {admin_headers['Authorization'].split(' ')[1]}"},
+    )
+    assert me_res.json()["reports_to_id"] is None
 
-    # Admin sets employee's manager to admin_user
+    # Admin sets employee's supervisor to admin_user
     response = await client.patch(
-        f"/users/{employee_user.id}/manager",
-        json={"manager_id": admin_user.id},
+        f"/users/{employee_user.id}/reports-to",
+        json={"reports_to_id": admin_user.id},
         headers=admin_headers,
     )
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert data["id"] == employee_user.id
-    assert data["manager_id"] == admin_user.id
+    assert data["reports_to_id"] == admin_user.id
 
 
 @pytest.mark.asyncio
-async def test_admin_set_user_manager_self_rejected(
+async def test_admin_set_user_reports_to_self_rejected(
     client: AsyncClient,
     employee_user: User,
     admin_headers: dict[str, str],
 ) -> None:
     """
-    Test setting manager_id to user's own ID via API returns HTTP 400 Bad Request.
+    Test setting reports_to_id to user's own ID via API returns HTTP 400 Bad Request.
     """
     response = await client.patch(
-        f"/users/{employee_user.id}/manager",
-        json={"manager_id": employee_user.id},
+        f"/users/{employee_user.id}/reports-to",
+        json={"reports_to_id": employee_user.id},
         headers=admin_headers,
     )
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert "cannot be their own manager" in response.json()["detail"].lower()
+    assert "cannot report to themselves" in response.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
-async def test_admin_set_user_manager_nonexistent_manager_rejected(
+async def test_admin_set_user_reports_to_nonexistent_supervisor_rejected(
     client: AsyncClient,
     employee_user: User,
     admin_headers: dict[str, str],
 ) -> None:
     """
-    Test setting manager_id to a non-existent user ID via API returns HTTP 404 Not Found.
+    Test setting reports_to_id to a non-existent user ID via API returns HTTP 404 Not Found.
     """
     response = await client.patch(
-        f"/users/{employee_user.id}/manager",
-        json={"manager_id": 99999},
+        f"/users/{employee_user.id}/reports-to",
+        json={"reports_to_id": 99999},
         headers=admin_headers,
     )
     assert response.status_code == status.HTTP_404_NOT_FOUND
-    assert "manager user not found" in response.json()["detail"].lower()
+    assert "supervisor user not found" in response.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
-async def test_admin_set_user_manager_cycle_rejected(
+async def test_admin_set_user_reports_to_cycle_rejected(
     client: AsyncClient,
     admin_user: User,
     employee_user: User,
@@ -150,17 +155,16 @@ async def test_admin_set_user_manager_cycle_rejected(
     """
     # Employee reports to Admin
     await client.patch(
-        f"/users/{employee_user.id}/manager",
-        json={"manager_id": admin_user.id},
+        f"/users/{employee_user.id}/reports-to",
+        json={"reports_to_id": admin_user.id},
         headers=admin_headers,
     )
 
-    # Attempt to set Admin's manager to Employee (cycle)
+    # Attempt to set Admin's supervisor to Employee (cycle)
     response = await client.patch(
-        f"/users/{admin_user.id}/manager",
-        json={"manager_id": employee_user.id},
+        f"/users/{admin_user.id}/reports-to",
+        json={"reports_to_id": employee_user.id},
         headers=admin_headers,
     )
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert "circular manager hierarchy" in response.json()["detail"].lower()
-
+    assert "circular reporting hierarchy" in response.json()["detail"].lower()

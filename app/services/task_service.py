@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,21 +28,23 @@ async def create_task(db: AsyncSession, task_in: TaskCreate, creator: User) -> T
     if assignee.role != UserRole.EMPLOYEE:
         raise BadRequestException("Tasks can only be assigned to users with the EMPLOYEE role.")
 
-    is_admin = (creator.role == UserRole.ADMIN)
-    is_direct_manager = (assignee.manager_id == creator.id)
+    is_admin = creator.role == UserRole.ADMIN
+    is_direct_manager = assignee.reports_to_id == creator.id
 
     if not (is_admin or is_direct_manager):
         raise AuthorizationException("You do not have permission to assign tasks to this employee.")
 
     # Defense-in-depth: Self-assignment via manager path blocked
     if not is_admin and task_in.assigned_to == creator.id:
-        raise AuthorizationException("You cannot assign a task to yourself via the manager assignment path.")
+        raise AuthorizationException(
+            "You cannot assign a task to yourself via the manager assignment path."
+        )
 
     db_task = Task(
         title=task_in.title,
         description=task_in.description,
         priority=task_in.priority,
-        due_date=task_in.due_date,
+        due_datetime=task_in.due_datetime,
         assigned_to=task_in.assigned_to,
         created_by=creator.id,
     )
@@ -63,7 +67,7 @@ async def get_team_tasks(
     Lists tasks assigned to any of the current user's direct reports.
     Returns an empty list if the user has no direct reports.
     """
-    reports_stmt = select(User.id).where(User.manager_id == user.id)
+    reports_stmt = select(User.id).where(User.reports_to_id == user.id)
     reports_res = await db.execute(reports_stmt)
     report_ids = reports_res.scalars().all()
 
@@ -150,6 +154,7 @@ async def update_task(
 ) -> Task:
     """
     Updates a task. Admin can update any field; Employee can only update status.
+    Automatically sets completed_at timestamp when status transitions to COMPLETED.
     """
     db_task = await get_task_by_id(db, task_id, user)
 
@@ -161,6 +166,14 @@ async def update_task(
         invalid_keys = [k for k in update_data.keys() if k != "status"]
         if invalid_keys:
             raise AuthorizationException("Employees are only permitted to update the task status.")
+
+    # Status transition logic for completed_at timestamp
+    if "status" in update_data:
+        new_status = update_data["status"]
+        if new_status == TaskStatus.COMPLETED and db_task.status != TaskStatus.COMPLETED:
+            db_task.completed_at = datetime.now(UTC)
+        elif new_status != TaskStatus.COMPLETED and db_task.status == TaskStatus.COMPLETED:
+            db_task.completed_at = None
 
     # Apply changes
     for key, value in update_data.items():

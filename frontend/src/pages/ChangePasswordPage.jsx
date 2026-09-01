@@ -6,11 +6,13 @@ import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { Alert } from '../components/ui/Alert';
 import { Spinner } from '../components/ui/Spinner';
-import { ShieldAlert, LogOut } from 'lucide-react';
+import { ShieldAlert, KeyRound, LogOut, ArrowLeft } from 'lucide-react';
 
 export function ChangePasswordPage() {
   const navigate = useNavigate();
   const { changePassword, logout, user } = useAuthStore();
+
+  const isForcedFlow = Boolean(user?.must_change_password);
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -24,7 +26,9 @@ export function ChangePasswordPage() {
     const newErrors = {};
 
     if (!currentPassword) {
-      newErrors.currentPassword = 'Current temporary password is required.';
+      newErrors.currentPassword = isForcedFlow
+        ? 'Current temporary password is required.'
+        : 'Current password is required.';
     }
 
     if (!newPassword) {
@@ -43,6 +47,11 @@ export function ChangePasswordPage() {
     return Object.keys(newErrors).length === 0;
   };
 
+  const handleCancel = () => {
+    const targetPath = user?.role === 'ADMIN' ? '/admin/tasks' : '/dashboard';
+    navigate(targetPath);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setServerError('');
@@ -55,7 +64,9 @@ export function ChangePasswordPage() {
       const targetPath = updatedUser?.role === 'ADMIN' ? '/admin/tasks' : '/dashboard';
       navigate(targetPath, { replace: true });
     } catch (err) {
-      const msg = err.response?.data?.detail || 'Failed to update password. Please check your current password.';
+      const msg =
+        err.response?.data?.detail ||
+        'Failed to update password. Please check your current password.';
       setServerError(msg);
     } finally {
       setIsSubmitting(false);
@@ -72,21 +83,38 @@ export function ChangePasswordPage() {
       {/* Brand Header */}
       <div className="flex items-center gap-2 mb-6 select-none">
         <div className="w-9 h-9 rounded-xl bg-[var(--surface-2)] border border-[var(--border-strong)] flex items-center justify-center text-[var(--accent)]">
-          <ShieldAlert className="w-5 h-5" />
+          {isForcedFlow ? (
+            <ShieldAlert className="w-5 h-5" />
+          ) : (
+            <KeyRound className="w-5 h-5" />
+          )}
         </div>
         <span className="text-lg font-semibold text-[var(--text-primary)] tracking-tight">
-          employee task management
+          Teamloom
         </span>
       </div>
 
       {/* Change Password Card */}
       <Card className="w-full max-w-md p-6">
         <div className="mb-6">
+          {!isForcedFlow && (
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="inline-flex items-center gap-1.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors mb-3 cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Back</span>
+            </button>
+          )}
+
           <h1 className="text-xl font-semibold text-[var(--text-primary)] mb-1">
-            Change Temporary Password
+            {isForcedFlow ? 'Change Temporary Password' : 'Change Password'}
           </h1>
           <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-            As a security requirement, you must update your temporary password before accessing your account dashboard.
+            {isForcedFlow
+              ? 'As a security requirement, you must update your temporary password before accessing your account dashboard.'
+              : 'Enter your current password and choose a new password for your account.'}
           </p>
         </div>
 
@@ -98,7 +126,7 @@ export function ChangePasswordPage() {
 
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           <Input
-            label="Current (Temporary) Password"
+            label={isForcedFlow ? 'Current (Temporary) Password' : 'Current Password'}
             type="password"
             placeholder="••••••••••••"
             value={currentPassword}
@@ -139,32 +167,50 @@ export function ChangePasswordPage() {
             autoComplete="new-password"
           />
 
-          <Button
-            type="submit"
-            variant="primary"
-            className="w-full justify-center mt-2"
-            disabled={isSubmitting}
-          >
-            {isSubmitting ? (
-              <span className="flex items-center gap-2">
-                <Spinner size="sm" /> Updating Password...
-              </span>
-            ) : (
-              'Update Password & Continue'
+          <div className="flex items-center gap-3 pt-2">
+            {!isForcedFlow && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={handleCancel}
+                disabled={isSubmitting}
+                className="flex-1 justify-center"
+              >
+                Cancel
+              </Button>
             )}
-          </Button>
+
+            <Button
+              type="submit"
+              variant="primary"
+              className={`${isForcedFlow ? 'w-full' : 'flex-1'} justify-center`}
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? (
+                <span className="flex items-center gap-2">
+                  <Spinner size="sm" /> Updating Password...
+                </span>
+              ) : isForcedFlow ? (
+                'Update Password & Continue'
+              ) : (
+                'Update Password'
+              )}
+            </Button>
+          </div>
         </form>
 
-        <div className="mt-6 pt-4 border-t border-[var(--border)] flex justify-between items-center text-xs text-[var(--text-muted)]">
-          <span>Need help? Contact your Admin</span>
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="flex items-center gap-1 text-[var(--text-secondary)] hover:text-[var(--danger)] transition-colors font-medium"
-          >
-            <LogOut className="w-3.5 h-3.5" /> Sign out
-          </button>
-        </div>
+        {isForcedFlow && (
+          <div className="mt-6 pt-4 border-t border-[var(--border)] flex justify-between items-center text-xs text-[var(--text-muted)]">
+            <span>Need help? Contact your Admin</span>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="flex items-center gap-1 text-[var(--text-secondary)] hover:text-[var(--danger)] transition-colors font-medium cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" /> Sign out
+            </button>
+          </div>
+        )}
       </Card>
     </div>
   );

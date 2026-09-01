@@ -64,7 +64,7 @@ def record_test(
 
 def run_all_qa_tests():
     print("==========================================================")
-    print("      EMPLOYEE TASK MANAGEMENT SYSTEM - QA TEST SUITE    ")
+    print("           TEAMLOOM SYSTEM - QA TEST SUITE               ")
     print("==========================================================")
 
     # ----------------------------------------------------

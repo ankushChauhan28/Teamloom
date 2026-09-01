@@ -13,11 +13,11 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.config import settings
 from app.db.base import Base
+from app.models.leave import LeaveRequest  # noqa: F401
+from app.models.task import Task  # noqa: F401
 
 # Import models to ensure they register on Base.metadata
 from app.models.user import User  # noqa: F401
-from app.models.task import Task  # noqa: F401
-from app.models.leave import LeaveRequest  # noqa: F401
 
 config = context.config
 

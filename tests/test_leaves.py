@@ -3,6 +3,7 @@ Integration Tests for Leave Endpoints (/leaves/)
 """
 
 from datetime import date, timedelta
+
 import pytest
 from fastapi import status
 from httpx import AsyncClient
