@@ -2,7 +2,8 @@
 Unit Tests for Service Layer Functions (Isolated Business Logic)
 """
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
+
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,11 +12,10 @@ from app.core.exceptions import (
     BadRequestException,
     InvalidCredentialsException,
     ResourceNotFoundException,
-    UserAlreadyExistsException,
 )
 from app.models.leave import LeaveStatus
 from app.models.task import TaskPriority, TaskStatus
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.schemas.leave import LeaveCreate, LeaveUpdateStatus
 from app.schemas.task import TaskCreate, TaskUpdate
 from app.schemas.user import EmployeeCreate, UserLogin
@@ -39,6 +39,119 @@ async def test_unit_authenticate_user_wrong_password_raises_exception(
         await auth_service.authenticate_user(db=db_session, login_in=login_in)
 
 
+@pytest.mark.asyncio
+async def test_unit_authenticate_user_nonexistent_user_raises_exception(
+    db_session: AsyncSession,
+) -> None:
+    """
+    Unit Test: Authenticating non-existent employee_code runs constant-time dummy bcrypt and raises `InvalidCredentialsException`.
+    """
+    login_in = UserLogin(employee_code="EMP-99999", password="anypassword!")
+    with pytest.raises(InvalidCredentialsException):
+        await auth_service.authenticate_user(db=db_session, login_in=login_in)
+
+
+@pytest.mark.asyncio
+async def test_unit_authenticate_user_locked_account_raises_exception(
+    db_session: AsyncSession,
+    employee_user: User,
+) -> None:
+    """
+    Unit Test: Authenticating against locked user (both naive & timezone-aware locked_until) raises `InvalidCredentialsException`.
+    """
+    # 1. Timezone-aware locked_until in future
+    employee_user.locked_until = datetime.now(UTC) + timedelta(minutes=15)
+    await db_session.commit()
+
+    login_in = UserLogin(employee_code=employee_user.employee_code, password="employeepassword123")
+    with pytest.raises(InvalidCredentialsException):
+        await auth_service.authenticate_user(db=db_session, login_in=login_in)
+
+    # 2. Naive locked_until in future (e.g. SQLite driver return)
+    employee_user.locked_until = datetime.now() + timedelta(minutes=15)  # naive
+    await db_session.commit()
+
+    with pytest.raises(InvalidCredentialsException):
+        await auth_service.authenticate_user(db=db_session, login_in=login_in)
+
+
+@pytest.mark.asyncio
+async def test_unit_change_password_wrong_current_password_raises(
+    db_session: AsyncSession,
+    employee_user: User,
+) -> None:
+    """
+    Unit Test: change_password with wrong current password raises InvalidCredentialsException.
+    """
+    from app.schemas.user import PasswordChange
+
+    pwd_in = PasswordChange(
+        current_password="WrongCurrentPassword!", new_password="NewValidPassword123!"
+    )
+    with pytest.raises(InvalidCredentialsException):
+        await auth_service.change_password(db=db_session, user=employee_user, pwd_in=pwd_in)
+
+
+@pytest.mark.asyncio
+async def test_unit_refresh_access_token_missing_sub_and_nonexistent_user(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Unit Test: refresh_access_token raises AuthenticationException when sub is missing or user non-existent.
+    """
+    from app.core.exceptions import AuthenticationException
+
+    # 1. Payload missing 'sub'
+    monkeypatch.setattr("app.services.auth_service.decode_refresh_token", lambda token: {})
+    with pytest.raises(AuthenticationException, match="Invalid refresh token payload."):
+        await auth_service.refresh_access_token(db=db_session, refresh_token="dummy")
+
+    # 2. Payload with non-existent sub email
+    monkeypatch.setattr(
+        "app.services.auth_service.decode_refresh_token", lambda token: {"sub": "ghost@example.com"}
+    )
+    with pytest.raises(AuthenticationException, match="User not found."):
+        await auth_service.refresh_access_token(db=db_session, refresh_token="dummy")
+
+
+@pytest.mark.asyncio
+async def test_unit_authenticate_user_lockout_transition_and_reset(
+    db_session: AsyncSession,
+    employee_user: User,
+) -> None:
+    """
+    Unit Test: 5th failed attempt sets locked_until, and subsequent successful login clears failed attempts and locked_until.
+    """
+    login_fail = UserLogin(employee_code=employee_user.employee_code, password="WrongPassword!")
+
+    # 4 failed attempts
+    for _ in range(4):
+        with pytest.raises(InvalidCredentialsException):
+            await auth_service.authenticate_user(db=db_session, login_in=login_fail)
+
+    assert employee_user.failed_login_attempts == 4
+    assert employee_user.locked_until is None
+
+    # 5th failed attempt triggers locked_until
+    with pytest.raises(InvalidCredentialsException):
+        await auth_service.authenticate_user(db=db_session, login_in=login_fail)
+
+    assert employee_user.failed_login_attempts == 5
+    assert employee_user.locked_until is not None
+
+    # Clear lock window to test successful login reset path
+    employee_user.locked_until = None
+    await db_session.commit()
+
+    login_success = UserLogin(
+        employee_code=employee_user.employee_code, password="employeepassword123"
+    )
+    user = await auth_service.authenticate_user(db=db_session, login_in=login_success)
+    assert user.failed_login_attempts == 0
+    assert user.locked_until is None
+
+
 # ==========================================
 # TASK SERVICE UNIT TESTS
 # ==========================================
@@ -57,7 +170,7 @@ async def test_unit_create_task_success(
         title="Service Unit Task",
         description="Testing task service directly.",
         priority=TaskPriority.HIGH,
-        due_date=date.today() + timedelta(days=7),
+        due_datetime=datetime.now(UTC) + timedelta(days=7),
         assigned_to=employee_user.id,
     )
     task = await task_service.create_task(db=db_session, task_in=task_in, creator=admin_user)
@@ -81,7 +194,7 @@ async def test_unit_create_task_nonexistent_assignee_raises_exception(
         title="Invalid Assignee Task",
         description="Nonexistent assignee.",
         priority=TaskPriority.LOW,
-        due_date=date.today() + timedelta(days=2),
+        due_datetime=datetime.now(UTC) + timedelta(days=2),
         assigned_to=99999,
     )
     with pytest.raises(ResourceNotFoundException) as exc_info:
@@ -152,84 +265,82 @@ async def test_unit_review_leave_request_success(
 
 
 @pytest.mark.asyncio
-async def test_unit_set_user_manager_success(
+async def test_unit_set_user_reports_to_success(
     db_session: AsyncSession, admin_user: User, employee_user: User
 ) -> None:
     """
-    Unit Test: Setting a valid manager ID on an employee succeeds.
+    Unit Test: Setting a valid reports-to supervisor ID on an employee succeeds.
     """
-    updated_user = await user_service.set_user_manager(
-        db=db_session, target_user_id=employee_user.id, manager_id=admin_user.id
+    updated_user = await user_service.set_user_reports_to(
+        db=db_session, target_user_id=employee_user.id, reports_to_id=admin_user.id
     )
-    assert updated_user.manager_id == admin_user.id
+    assert updated_user.reports_to_id == admin_user.id
 
 
 @pytest.mark.asyncio
-async def test_unit_set_user_manager_nonexistent_target_raises(
+async def test_unit_set_user_reports_to_nonexistent_target_raises(
     db_session: AsyncSession, admin_user: User
 ) -> None:
     """
-    Unit Test: Setting manager for a non-existent user ID raises ResourceNotFoundException.
+    Unit Test: Setting supervisor for a non-existent user ID raises ResourceNotFoundException.
     """
     with pytest.raises(ResourceNotFoundException) as exc_info:
-        await user_service.set_user_manager(
-            db=db_session, target_user_id=99999, manager_id=admin_user.id
+        await user_service.set_user_reports_to(
+            db=db_session, target_user_id=99999, reports_to_id=admin_user.id
         )
     assert "user not found" in str(exc_info.value).lower()
 
 
 @pytest.mark.asyncio
-async def test_unit_set_user_manager_nonexistent_manager_raises(
+async def test_unit_set_user_reports_to_nonexistent_supervisor_raises(
     db_session: AsyncSession, employee_user: User
 ) -> None:
     """
-    Unit Test: Setting manager_id to a non-existent user ID raises ResourceNotFoundException.
+    Unit Test: Setting reports_to_id to a non-existent user ID raises ResourceNotFoundException.
     """
     with pytest.raises(ResourceNotFoundException) as exc_info:
-        await user_service.set_user_manager(
-            db=db_session, target_user_id=employee_user.id, manager_id=99999
+        await user_service.set_user_reports_to(
+            db=db_session, target_user_id=employee_user.id, reports_to_id=99999
         )
-    assert "manager user not found" in str(exc_info.value).lower()
+    assert "supervisor user not found" in str(exc_info.value).lower()
 
 
 @pytest.mark.asyncio
-async def test_unit_set_user_manager_self_raises(
+async def test_unit_set_user_reports_to_self_raises(
     db_session: AsyncSession, employee_user: User
 ) -> None:
     """
-    Unit Test: Setting manager_id to user's own ID raises BadRequestException.
+    Unit Test: Setting reports_to_id to user's own ID raises BadRequestException.
     """
     with pytest.raises(BadRequestException) as exc_info:
-        await user_service.set_user_manager(
-            db=db_session, target_user_id=employee_user.id, manager_id=employee_user.id
+        await user_service.set_user_reports_to(
+            db=db_session, target_user_id=employee_user.id, reports_to_id=employee_user.id
         )
-    assert "cannot be their own manager" in str(exc_info.value).lower()
+    assert "cannot report to themselves" in str(exc_info.value).lower()
 
 
 @pytest.mark.asyncio
-async def test_unit_set_user_manager_direct_cycle_raises(
+async def test_unit_set_user_reports_to_direct_cycle_raises(
     db_session: AsyncSession, admin_user: User, employee_user: User
 ) -> None:
     """
     Unit Test: Creating a 2-node circular chain (A -> B, then B -> A) raises BadRequestException.
     """
-    # Set User B (employee) manager to User A (admin)
-    await user_service.set_user_manager(
-        db=db_session, target_user_id=employee_user.id, manager_id=admin_user.id
+    # Set User B (employee) reports to User A (admin)
+    await user_service.set_user_reports_to(
+        db=db_session, target_user_id=employee_user.id, reports_to_id=admin_user.id
     )
 
-    # Attempt to set User A's manager to User B (creating A -> B -> A cycle)
+    # Attempt to set User A reports to User B (creating A -> B -> A cycle)
     with pytest.raises(BadRequestException) as exc_info:
-        await user_service.set_user_manager(
-            db=db_session, target_user_id=admin_user.id, manager_id=employee_user.id
+        await user_service.set_user_reports_to(
+            db=db_session, target_user_id=admin_user.id, reports_to_id=employee_user.id
         )
-    assert "circular manager hierarchy" in str(exc_info.value).lower()
+    assert "circular reporting hierarchy" in str(exc_info.value).lower()
 
 
 @pytest.mark.asyncio
-async def test_unit_set_user_manager_longer_cycle_raises(
-    db_session: AsyncSession
-) -> None:
+async def test_unit_set_user_reports_to_longer_cycle_raises(db_session: AsyncSession) -> None:
     """
     Unit Test: Creating a 3-node circular chain (A -> B -> C, then C -> A) raises BadRequestException.
     """
@@ -249,36 +360,36 @@ async def test_unit_set_user_manager_longer_cycle_raises(
     user_a, user_b, user_c = emp_a, emp_b, emp_c
 
     # A reports to B
-    await user_service.set_user_manager(
-        db=db_session, target_user_id=user_a.id, manager_id=user_b.id
+    await user_service.set_user_reports_to(
+        db=db_session, target_user_id=user_a.id, reports_to_id=user_b.id
     )
     # B reports to C
-    await user_service.set_user_manager(
-        db=db_session, target_user_id=user_b.id, manager_id=user_c.id
+    await user_service.set_user_reports_to(
+        db=db_session, target_user_id=user_b.id, reports_to_id=user_c.id
     )
 
     # Attempting C reports to A (creating C -> A -> B -> C cycle)
     with pytest.raises(BadRequestException) as exc_info:
-        await user_service.set_user_manager(
-            db=db_session, target_user_id=user_c.id, manager_id=user_a.id
+        await user_service.set_user_reports_to(
+            db=db_session, target_user_id=user_c.id, reports_to_id=user_a.id
         )
-    assert "circular manager hierarchy" in str(exc_info.value).lower()
+    assert "circular reporting hierarchy" in str(exc_info.value).lower()
 
 
 @pytest.mark.asyncio
-async def test_unit_set_user_manager_clear_success(
+async def test_unit_set_user_reports_to_clear_success(
     db_session: AsyncSession, admin_user: User, employee_user: User
 ) -> None:
     """
-    Unit Test: Setting manager_id to None clears existing manager.
+    Unit Test: Setting reports_to_id to None clears existing supervisor.
     """
-    await user_service.set_user_manager(
-        db=db_session, target_user_id=employee_user.id, manager_id=admin_user.id
+    await user_service.set_user_reports_to(
+        db=db_session, target_user_id=employee_user.id, reports_to_id=admin_user.id
     )
-    cleared_user = await user_service.set_user_manager(
-        db=db_session, target_user_id=employee_user.id, manager_id=None
+    cleared_user = await user_service.set_user_reports_to(
+        db=db_session, target_user_id=employee_user.id, reports_to_id=None
     )
-    assert cleared_user.manager_id is None
+    assert cleared_user.reports_to_id is None
 
 
 @pytest.mark.asyncio
@@ -292,7 +403,7 @@ async def test_unit_create_task_non_employee_assignee_raises_exception(
         title="Admin Assignee Task",
         description="Should fail",
         priority=TaskPriority.HIGH,
-        due_date=date.today() + timedelta(days=2),
+        due_datetime=datetime.now(UTC) + timedelta(days=2),
         assigned_to=admin_user.id,
     )
     with pytest.raises(BadRequestException) as exc_info:
@@ -319,14 +430,14 @@ async def test_unit_get_team_tasks_filtering_and_sorting(
     """
     Unit Test: get_team_tasks with status, priority, and sort_by filters.
     """
-    await user_service.set_user_manager(
-        db=db_session, target_user_id=employee_user.id, manager_id=admin_user.id
+    await user_service.set_user_reports_to(
+        db=db_session, target_user_id=employee_user.id, reports_to_id=admin_user.id
     )
     task_in = TaskCreate(
         title="Team Task Filter",
         description="Filter test",
         priority=TaskPriority.HIGH,
-        due_date=date.today() + timedelta(days=2),
+        due_datetime=datetime.now(UTC) + timedelta(days=2),
         assigned_to=employee_user.id,
     )
     await task_service.create_task(db=db_session, task_in=task_in, creator=admin_user)
@@ -352,7 +463,7 @@ async def test_unit_update_task_employee_disallowed_field_raises_exception(
         title="Original Title",
         description="Desc",
         priority=TaskPriority.LOW,
-        due_date=date.today() + timedelta(days=2),
+        due_datetime=datetime.now(UTC) + timedelta(days=2),
         assigned_to=employee_user.id,
     )
     task = await task_service.create_task(db=db_session, task_in=task_in, creator=admin_user)
@@ -376,7 +487,7 @@ async def test_unit_delete_task_non_admin_raises_exception(
         title="Delete Test Task",
         description="Desc",
         priority=TaskPriority.LOW,
-        due_date=date.today() + timedelta(days=2),
+        due_datetime=datetime.now(UTC) + timedelta(days=2),
         assigned_to=employee_user.id,
     )
     task = await task_service.create_task(db=db_session, task_in=task_in, creator=admin_user)
@@ -384,6 +495,44 @@ async def test_unit_delete_task_non_admin_raises_exception(
     with pytest.raises(AuthorizationException) as exc_info:
         await task_service.delete_task(db=db_session, task_id=task.id, user=employee_user)
     assert "only administrators can delete tasks" in str(exc_info.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_unit_task_status_transition_updates_completed_at(
+    db_session: AsyncSession, admin_user: User, employee_user: User
+) -> None:
+    """
+    Unit Test: Transitioning task to COMPLETED automatically populates completed_at timestamp,
+    and transitioning to IN_PROGRESS resets completed_at back to None.
+    """
+    task_in = TaskCreate(
+        title="Completed Timestamp Test Task",
+        description="Testing completed_at",
+        priority=TaskPriority.HIGH,
+        due_datetime=datetime.now(UTC) + timedelta(days=2),
+        assigned_to=employee_user.id,
+    )
+    task = await task_service.create_task(db=db_session, task_in=task_in, creator=admin_user)
+    assert task.completed_at is None
+
+    # Update to COMPLETED
+    updated_comp = await task_service.update_task(
+        db=db_session,
+        task_id=task.id,
+        task_update=TaskUpdate(status=TaskStatus.COMPLETED),
+        user=admin_user,
+    )
+    assert updated_comp.completed_at is not None
+    assert isinstance(updated_comp.completed_at, datetime)
+
+    # Update to IN_PROGRESS (resets completed_at)
+    updated_reset = await task_service.update_task(
+        db=db_session,
+        task_id=task.id,
+        task_update=TaskUpdate(status=TaskStatus.IN_PROGRESS),
+        user=admin_user,
+    )
+    assert updated_reset.completed_at is None
 
 
 @pytest.mark.asyncio
@@ -471,6 +620,8 @@ async def test_unit_get_leaves_invalid_sort_column_raises_exception(
     """
     Unit Test: Passing invalid sort_by to get_leaves raises BadRequestException.
     """
+
+
 @pytest.mark.asyncio
 async def test_unit_user_service_additional_coverage(
     db_session: AsyncSession, employee_user: User, admin_user: User
@@ -491,6 +642,7 @@ async def test_unit_user_service_additional_coverage(
 
     # 2. update_user_profile
     from app.schemas.user import UserUpdate
+
     updated_profile = await user_service.update_user_profile(
         db=db_session, user=employee_user, user_update=UserUpdate(full_name="New Updated Name")
     )
@@ -501,8 +653,8 @@ async def test_unit_user_service_additional_coverage(
     assert len(employees) >= 1
 
     # 4. get_user_direct_reports
-    await user_service.set_user_manager(
-        db=db_session, target_user_id=employee_user.id, manager_id=admin_user.id
+    await user_service.set_user_reports_to(
+        db=db_session, target_user_id=employee_user.id, reports_to_id=admin_user.id
     )
     reports = await user_service.get_user_direct_reports(db=db_session, user_id=admin_user.id)
     assert len(reports) == 1
@@ -523,3 +675,157 @@ async def test_unit_user_service_additional_coverage(
     assert len(team_leaves) == 1
     assert team_leaves[0].employee_id == employee_user.id
 
+
+# ==========================================
+# ANALYTICS SERVICE UNIT TESTS
+# ==========================================
+
+
+@pytest.mark.asyncio
+async def test_unit_analytics_service_scoping_and_classification(
+    db_session: AsyncSession, admin_user: User, employee_user: User
+) -> None:
+    """
+    Unit Test: Direct unit coverage for analytics_service across all scoping rules & classification branches.
+    """
+    from datetime import UTC, datetime, timedelta
+    from app.models.task import Task, TaskStatus
+    from app.services import analytics_service
+    from app.services.analytics_service import _classify_task_state
+
+    # 1. Plain employee scope='self'
+    stats_self = await analytics_service.get_performance_analytics(
+        db=db_session, user=employee_user
+    )
+    assert stats_self.scope == "self"
+    assert stats_self.total_tasks == 0
+
+    # 2. Plain employee requesting another employee -> AuthorizationException
+    with pytest.raises(AuthorizationException):
+        await analytics_service.get_performance_analytics(
+            db=db_session, user=employee_user, employee_id=admin_user.id
+        )
+
+    # 3. Manager hierarchy setup
+    await user_service.set_user_reports_to(
+        db=db_session, target_user_id=employee_user.id, reports_to_id=admin_user.id
+    )
+    # Create employee 2 reporting to admin_user
+    emp2, _ = await user_service.create_employee(
+        db=db_session,
+        employee_in=EmployeeCreate(
+            email="emp2.unit@example.com",
+            full_name="Emp 2",
+            reports_to_id=admin_user.id,
+            designation="Junior Dev",
+        ),
+    )
+    # Create other employee with no supervisor
+    other_emp, _ = await user_service.create_employee(
+        db=db_session,
+        employee_in=EmployeeCreate(
+            email="other.unit@example.com",
+            full_name="Other Emp",
+            reports_to_id=None,
+            designation="Contractor",
+        ),
+    )
+
+    # Create manager (employee role) that has a report
+    mgr_user, _ = await user_service.create_employee(
+        db=db_session,
+        employee_in=EmployeeCreate(
+            email="mgr.unit@example.com",
+            full_name="Mgr User",
+            reports_to_id=None,
+            designation="Team Lead",
+        ),
+    )
+    await user_service.set_user_reports_to(
+        db=db_session, target_user_id=emp2.id, reports_to_id=mgr_user.id
+    )
+
+    # Manager requesting without employee_id -> scope='team'
+    mgr_team_stats = await analytics_service.get_performance_analytics(
+        db=db_session, user=mgr_user
+    )
+    assert mgr_team_stats.scope == "team"
+
+    # Manager requesting own ID -> scope='self'
+    mgr_self_stats = await analytics_service.get_performance_analytics(
+        db=db_session, user=mgr_user, employee_id=mgr_user.id
+    )
+    assert mgr_self_stats.scope == "self"
+
+    # Manager requesting direct report ID -> scope='employee'
+    mgr_rep_stats = await analytics_service.get_performance_analytics(
+        db=db_session, user=mgr_user, employee_id=emp2.id
+    )
+    assert mgr_rep_stats.scope == "employee"
+    assert mgr_rep_stats.employee_id == emp2.id
+
+    # Manager requesting non-report ID -> AuthorizationException
+    with pytest.raises(AuthorizationException):
+        await analytics_service.get_performance_analytics(
+            db=db_session, user=mgr_user, employee_id=other_emp.id
+        )
+
+    # 4. Admin scoping:
+    # Admin without employee_id -> scope='org'
+    admin_org_stats = await analytics_service.get_performance_analytics(
+        db=db_session, user=admin_user
+    )
+    assert admin_org_stats.scope == "org"
+
+    # Admin with employee_id -> scope='employee'
+    admin_emp_stats = await analytics_service.get_performance_analytics(
+        db=db_session, user=admin_user, employee_id=employee_user.id
+    )
+    assert admin_emp_stats.scope == "employee"
+    assert admin_emp_stats.employee_id == employee_user.id
+
+    # Admin with nonexistent employee_id -> ResourceNotFoundException
+    with pytest.raises(ResourceNotFoundException):
+        await analytics_service.get_performance_analytics(
+            db=db_session, user=admin_user, employee_id=99999
+        )
+
+    # 5. Direct unit verification of _classify_task_state
+    now_dt = datetime.now(UTC)
+    t_completed_no_completed_at = Task(
+        title="Completed no stamp",
+        due_datetime=now_dt + timedelta(days=1),
+        status=TaskStatus.COMPLETED,
+        completed_at=None,
+    )
+    assert _classify_task_state(t_completed_no_completed_at, now_dt) == "late"
+
+    t_completed_on_time = Task(
+        title="On time",
+        due_datetime=now_dt + timedelta(days=2),
+        status=TaskStatus.COMPLETED,
+        completed_at=now_dt + timedelta(days=1),
+    )
+    assert _classify_task_state(t_completed_on_time, now_dt) == "on_time"
+
+    t_completed_late = Task(
+        title="Late",
+        due_datetime=now_dt + timedelta(days=1),
+        status=TaskStatus.COMPLETED,
+        completed_at=now_dt + timedelta(days=2),
+    )
+    assert _classify_task_state(t_completed_late, now_dt) == "late"
+
+    t_overdue = Task(
+        title="Overdue",
+        due_datetime=now_dt - timedelta(days=1),
+        status=TaskStatus.PENDING,
+    )
+    assert _classify_task_state(t_overdue, now_dt) == "overdue"
+
+    t_pending = Task(
+        title="Pending",
+        due_datetime=now_dt + timedelta(days=1),
+        status=TaskStatus.IN_PROGRESS,
+    )
+    assert _classify_task_state(t_pending, now_dt) == "pending"

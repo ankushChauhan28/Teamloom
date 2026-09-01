@@ -34,8 +34,12 @@ Desktop.ini
 htmlcov/
 test_results.json
 
+# Local scratch scripts
+scratch/
+
 # Private documentation
 docs/INTERVIEW_PREP.md
+
 
 
 

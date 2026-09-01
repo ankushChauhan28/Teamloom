@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import AuthenticationException
+from app.core.rate_limit import RateLimiter, get_rate_limiter
 from app.core.security import create_access_token, create_refresh_token, get_current_user
 from app.db.session import get_db
 from app.models.user import User
@@ -11,6 +12,16 @@ from app.schemas.user import PasswordChange, Token, UserLogin, UserRead
 from app.services import auth_service
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+
+def extract_client_ip(request: Request) -> str:
+    """Extracts client IP from X-Forwarded-For header or request client host."""
+    x_forwarded_for = request.headers.get("X-Forwarded-For")
+    if x_forwarded_for:
+        return x_forwarded_for.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "127.0.0.1"
 
 
 def set_refresh_token_cookie(response: Response, refresh_token: str) -> None:
@@ -30,11 +41,28 @@ def set_refresh_token_cookie(response: Response, refresh_token: str) -> None:
 
 @router.post("/login", response_model=Token)
 async def login(
-    login_in: UserLogin, response: Response, db: AsyncSession = Depends(get_db)
+    login_in: UserLogin,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter),
 ):
     """
-    Verifies user credentials, issues access token in body and refresh token in httpOnly cookie.
+    Verifies user credentials, enforces IP rate limiting and account lockout,
+    issues access token in body and refresh token in httpOnly cookie.
     """
+    if not isinstance(rate_limiter, RateLimiter):
+        rate_limiter = get_rate_limiter()
+
+    client_ip = extract_client_ip(request)
+    rate_result = await rate_limiter.check_and_increment(f"login:{client_ip}")
+    if not rate_result.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Please try again later.",
+            headers={"Retry-After": str(rate_result.retry_after_seconds)},
+        )
+
     user = await auth_service.authenticate_user(db=db, login_in=login_in)
     access_token = create_access_token(email=user.email, role=user.role.value)
     refresh_token = create_refresh_token(email=user.email, role=user.role.value)
@@ -49,13 +77,27 @@ async def login(
 
 @router.post("/swagger-login", response_model=Token, include_in_schema=False)
 async def swagger_login(
+    request: Request,
     response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter),
 ):
     """
     Form-data endpoint specifically for Swagger UI's 'Authorize' button authentication.
     """
+    if not isinstance(rate_limiter, RateLimiter):
+        rate_limiter = get_rate_limiter()
+
+    client_ip = extract_client_ip(request)
+    rate_result = await rate_limiter.check_and_increment(f"login:{client_ip}")
+    if not rate_result.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Please try again later.",
+            headers={"Retry-After": str(rate_result.retry_after_seconds)},
+        )
+
     login_in = UserLogin(employee_code=form_data.username, password=form_data.password)
     user = await auth_service.authenticate_user(db=db, login_in=login_in)
     access_token = create_access_token(email=user.email, role=user.role.value)
@@ -70,9 +112,7 @@ async def swagger_login(
 
 
 @router.post("/refresh", response_model=Token)
-async def refresh(
-    request: Request, response: Response, db: AsyncSession = Depends(get_db)
-):
+async def refresh(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
     """
     Exchanges a valid refresh token cookie for a new access token and rotates the refresh token cookie.
     """
@@ -107,4 +147,3 @@ async def change_password(
     Requires authentication (allows users with pending password change).
     """
     return await auth_service.change_password(db=db, user=current_user, pwd_in=pwd_in)
-

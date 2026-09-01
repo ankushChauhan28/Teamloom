@@ -1,6 +1,6 @@
 import enum
 
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -28,7 +28,8 @@ class Task(Base):
     description = Column(Text, nullable=False)
     status = Column(SQLEnum(TaskStatus), default=TaskStatus.PENDING, nullable=False)
     priority = Column(SQLEnum(TaskPriority), nullable=False)
-    due_date = Column(Date, nullable=False)
+    due_datetime = Column(DateTime(timezone=True), nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
     assigned_to = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_by = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

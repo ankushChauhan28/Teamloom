@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 import { ProtectedRoute } from './components/guards/ProtectedRoute';
+import { PasswordChangeRoute } from './components/guards/PasswordChangeRoute';
 import { AdminRoute } from './components/guards/AdminRoute';
 import { ManagerRoute } from './components/guards/ManagerRoute';
 import { LoginPage } from './pages/LoginPage';
@@ -9,8 +10,10 @@ import { ChangePasswordPage } from './pages/ChangePasswordPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { AdminTasksPage } from './pages/AdminTasksPage';
 import { AdminLeavesPage } from './pages/AdminLeavesPage';
+import { AdminEmployeesPage } from './pages/AdminEmployeesPage';
 import { LeavesPage } from './pages/LeavesPage';
 import { MyTeamPage } from './pages/MyTeamPage';
+import { MyPerformancePage } from './pages/MyPerformancePage';
 import { Spinner } from './components/ui/Spinner';
 
 // Component to perform role-based root redirection
@@ -25,10 +28,7 @@ export function App() {
   const { refreshSession, isLoading } = useAuthStore();
 
   useEffect(() => {
-    console.log('[App] App mounted, calling refreshSession()...');
-    refreshSession().then((success) => {
-      console.log('[App] refreshSession() resolved with result:', success);
-    });
+    refreshSession();
   }, [refreshSession]);
 
   // Full-page Spinner during initial session restoration bootstrap
@@ -53,9 +53,9 @@ export function App() {
         <Route
           path="/change-password"
           element={
-            <ProtectedRoute>
+            <PasswordChangeRoute>
               <ChangePasswordPage />
-            </ProtectedRoute>
+            </PasswordChangeRoute>
           }
         />
 
@@ -75,6 +75,16 @@ export function App() {
           element={
             <ProtectedRoute>
               <LeavesPage />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* Personal Performance Analytics Route */}
+        <Route
+          path="/my-performance"
+          element={
+            <ProtectedRoute>
+              <MyPerformancePage />
             </ProtectedRoute>
           }
         />
@@ -105,6 +115,16 @@ export function App() {
           element={
             <AdminRoute>
               <AdminLeavesPage />
+            </AdminRoute>
+          }
+        />
+
+        {/* Admin Manage Employees Route */}
+        <Route
+          path="/admin/employees"
+          element={
+            <AdminRoute>
+              <AdminEmployeesPage />
             </AdminRoute>
           }
         />

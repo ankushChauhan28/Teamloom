@@ -1,11 +1,11 @@
 from datetime import date
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_access_token, hash_password
 from app.models.leave import LeaveRequest, LeaveStatus
-from app.models.task import Task, TaskPriority, TaskStatus
 from app.models.user import User, UserRole
 
 
@@ -14,8 +14,8 @@ async def manager_hierarchy(db_session: AsyncSession):
     """
     Creates a manager hierarchy fixture:
     - Manager: EMP-1010 (EMPLOYEE role, manages Report 1)
-    - Report 1: EMP-1011 (EMPLOYEE role, manager_id = Manager.id)
-    - Other Employee: EMP-1012 (EMPLOYEE role, manager_id = None)
+    - Report 1: EMP-1011 (EMPLOYEE role, reports_to_id = Manager.id)
+    - Other Employee: EMP-1012 (EMPLOYEE role, reports_to_id = None)
     """
     manager = User(
         full_name="Manager Aisha",
@@ -35,7 +35,7 @@ async def manager_hierarchy(db_session: AsyncSession):
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
         employee_code="EMP-1011",
-        manager_id=manager.id,
+        reports_to_id=manager.id,
         must_change_password=False,
     )
     db_session.add(report1)
@@ -46,7 +46,7 @@ async def manager_hierarchy(db_session: AsyncSession):
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
         employee_code="EMP-1012",
-        manager_id=None,
+        reports_to_id=None,
         must_change_password=False,
     )
     db_session.add(other_emp)
@@ -90,7 +90,9 @@ async def test_get_my_direct_reports(client: AsyncClient, manager_hierarchy: dic
     assert res_empty.json() == []
 
 
-async def test_manager_create_task_for_direct_report_success(client: AsyncClient, manager_hierarchy: dict):
+async def test_manager_create_task_for_direct_report_success(
+    client: AsyncClient, manager_hierarchy: dict
+):
     """
     A non-admin manager can create/assign a task to their direct report.
     """
@@ -102,7 +104,7 @@ async def test_manager_create_task_for_direct_report_success(client: AsyncClient
         "title": "Quarterly Performance Review",
         "description": "Prepare self-assessment document",
         "priority": "HIGH",
-        "due_date": "2026-12-31",
+        "due_datetime": "2026-12-31T23:59:59Z",
         "assigned_to": report1.id,
     }
 
@@ -113,7 +115,9 @@ async def test_manager_create_task_for_direct_report_success(client: AsyncClient
     assert data["created_by"] == manager.id
 
 
-async def test_manager_cannot_assign_task_to_non_report_fails(client: AsyncClient, manager_hierarchy: dict):
+async def test_manager_cannot_assign_task_to_non_report_fails(
+    client: AsyncClient, manager_hierarchy: dict
+):
     """
     A non-admin manager CANNOT assign a task to someone who is NOT their direct report (403 Forbidden).
     """
@@ -124,7 +128,7 @@ async def test_manager_cannot_assign_task_to_non_report_fails(client: AsyncClien
         "title": "Unauthorized Task",
         "description": "Should fail with 403",
         "priority": "MEDIUM",
-        "due_date": "2026-12-31",
+        "due_datetime": "2026-12-31T23:59:59Z",
         "assigned_to": other_emp.id,
     }
 
@@ -133,7 +137,9 @@ async def test_manager_cannot_assign_task_to_non_report_fails(client: AsyncClien
     assert res.json()["detail"] == "You do not have permission to assign tasks to this employee."
 
 
-async def test_manager_cannot_assign_task_to_self_fails(client: AsyncClient, manager_hierarchy: dict):
+async def test_manager_cannot_assign_task_to_self_fails(
+    client: AsyncClient, manager_hierarchy: dict
+):
     """
     A non-admin manager CANNOT assign a task to themselves via manager path (403 Forbidden).
     """
@@ -144,7 +150,7 @@ async def test_manager_cannot_assign_task_to_self_fails(client: AsyncClient, man
         "title": "Self Assigned Task",
         "description": "Should fail with 403",
         "priority": "MEDIUM",
-        "due_date": "2026-12-31",
+        "due_datetime": "2026-12-31T23:59:59Z",
         "assigned_to": manager.id,
     }
 
@@ -166,7 +172,7 @@ async def test_get_team_tasks(client: AsyncClient, manager_hierarchy: dict):
         "title": "Team Task 1",
         "description": "Task for team view test",
         "priority": "LOW",
-        "due_date": "2026-12-31",
+        "due_datetime": "2026-12-31T23:59:59Z",
         "assigned_to": report1.id,
     }
     await client.post("/tasks/", json=payload, headers=mgr_headers)
@@ -326,7 +332,7 @@ async def test_edge_case_plain_employee_task_creation_fails(
         "title": "Plain Employee Task Attempt",
         "description": "Should fail with 403",
         "priority": "LOW",
-        "due_date": "2026-12-31",
+        "due_datetime": "2026-12-31T23:59:59Z",
         "assigned_to": report1.id,
     }
     res = await client.post("/tasks/", json=payload, headers=other_headers)
@@ -374,7 +380,7 @@ async def test_edge_case_manager_assign_to_nonexistent_user_id_fails(
         "title": "Task for Non-Existent User",
         "description": "Invalid assignee ID 99999",
         "priority": "MEDIUM",
-        "due_date": "2026-12-31",
+        "due_datetime": "2026-12-31T23:59:59Z",
         "assigned_to": 99999,
     }
     res = await client.post("/tasks/", json=payload, headers=mgr_headers)
@@ -386,12 +392,12 @@ async def test_edge_case_top_of_chain_user_leave_submission_and_review_flow(
     client: AsyncClient, manager_hierarchy: dict, admin_headers: dict
 ):
     """
-    Edge Case 4: A user with manager_id = None (top of chain) submits own leave request and admin reviews it -> confirm 200 OK.
+    Edge Case 4: A user with reports_to_id = None (top of chain) submits own leave request and admin reviews it -> confirm 200 OK.
     """
     other_headers = manager_hierarchy["other_headers"]
     other_emp = manager_hierarchy["other_emp"]
 
-    assert other_emp.manager_id is None
+    assert other_emp.reports_to_id is None
 
     # Submit leave request
     leave_payload = {

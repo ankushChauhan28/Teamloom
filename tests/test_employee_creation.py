@@ -24,7 +24,8 @@ async def test_admin_create_employee_success(
     payload = {
         "full_name": "Alice Employee",
         "email": "alice.created@example.com",
-        "manager_id": admin_user.id,
+        "reports_to_id": admin_user.id,
+        "designation": "Lead Engineer",
     }
     response = await client.post("/users/employees", json=payload, headers=admin_headers)
     assert response.status_code == status.HTTP_201_CREATED
@@ -32,7 +33,8 @@ async def test_admin_create_employee_success(
     data = response.json()
     assert data["full_name"] == "Alice Employee"
     assert data["email"] == "alice.created@example.com"
-    assert data["manager_id"] == admin_user.id
+    assert data["reports_to_id"] == admin_user.id
+    assert data["designation"] == "Lead Engineer"
     assert data["role"] == "EMPLOYEE"
     assert data["employee_code"].startswith("EMP-")
     assert data["must_change_password"] is True
@@ -123,7 +125,9 @@ async def test_must_change_password_enforcement_and_change_flow(
         captured_passwords.append(temp_password)
         return True
 
-    with patch("app.services.user_service.send_employee_welcome_email", side_effect=mock_send_email):
+    with patch(
+        "app.services.user_service.send_employee_welcome_email", side_effect=mock_send_email
+    ):
         create_res = await client.post(
             "/users/employees",
             json={"full_name": "Pwd Change User", "email": "pwd.change@example.com"},
@@ -213,7 +217,9 @@ async def test_pending_password_change_blocked_on_users_me(
         captured_passwords.append(temp_password)
         return True
 
-    with patch("app.services.user_service.send_employee_welcome_email", side_effect=mock_send_email):
+    with patch(
+        "app.services.user_service.send_employee_welcome_email", side_effect=mock_send_email
+    ):
         create_res = await client.post(
             "/users/employees",
             json={"full_name": "Audit User", "email": "audit.user@example.com"},
@@ -243,4 +249,3 @@ async def test_pending_password_change_blocked_on_users_me(
     )
     assert patch_me_res.status_code == status.HTTP_403_FORBIDDEN
     assert patch_me_res.json()["detail"] == "password_change_required"
-

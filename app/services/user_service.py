@@ -15,14 +15,19 @@ from app.models.user import User, UserRole
 from app.schemas.user import EmployeeCreate, UserUpdate
 
 
-async def update_user_profile(
-    db: AsyncSession, user: User, user_update: UserUpdate
-) -> User:
+async def update_user_profile(db: AsyncSession, user: User, user_update: UserUpdate) -> User:
     """
     Updates the profile of the target user.
     """
+    updated = False
     if user_update.full_name is not None:
         user.full_name = user_update.full_name
+        updated = True
+    if user_update.designation is not None:
+        user.designation = user_update.designation
+        updated = True
+
+    if updated:
         await db.commit()
         await db.refresh(user)
     return user
@@ -34,9 +39,6 @@ async def get_employees(db: AsyncSession) -> list[User]:
     """
     result = await db.execute(select(User).where(User.role == UserRole.EMPLOYEE))
     return list(result.scalars().all())
-
-
-
 
 
 async def _generate_next_employee_code(db: AsyncSession) -> str:
@@ -76,13 +78,11 @@ def _generate_temp_password(length: int = 14) -> str:
     return "".join(pwd)
 
 
-async def create_employee(
-    db: AsyncSession, employee_in: EmployeeCreate
-) -> tuple[User, bool]:
+async def create_employee(db: AsyncSession, employee_in: EmployeeCreate) -> tuple[User, bool]:
     """
     Creates a new employee account:
     - Verifies email uniqueness.
-    - Validates manager_id if provided.
+    - Validates reports_to_id if provided.
     - Generates sequential employee_code (EMP-1001, etc).
     - Generates temporary password via secrets module.
     - Hashes password and sets must_change_password = True.
@@ -94,11 +94,11 @@ async def create_employee(
     if existing_user:
         raise UserAlreadyExistsException("A user with this email address already exists.")
 
-    if employee_in.manager_id is not None:
-        mgr_res = await db.execute(select(User).where(User.id == employee_in.manager_id))
+    if employee_in.reports_to_id is not None:
+        mgr_res = await db.execute(select(User).where(User.id == employee_in.reports_to_id))
         proposed_mgr = mgr_res.scalar_one_or_none()
         if not proposed_mgr:
-            raise ResourceNotFoundException("Manager user not found.")
+            raise ResourceNotFoundException("Reports-to supervisor user not found.")
 
     emp_code = await _generate_next_employee_code(db)
     temp_password = _generate_temp_password()
@@ -109,7 +109,8 @@ async def create_employee(
         email=employee_in.email,
         hashed_password=hashed_pwd,
         role=UserRole.EMPLOYEE,
-        manager_id=employee_in.manager_id,
+        reports_to_id=employee_in.reports_to_id,
+        designation=employee_in.designation,
         employee_code=emp_code,
         must_change_password=True,
     )
@@ -127,9 +128,7 @@ async def create_employee(
     return new_user, email_sent
 
 
-async def reset_employee_temp_password(
-    db: AsyncSession, target_user_id: int
-) -> tuple[User, bool]:
+async def reset_employee_temp_password(db: AsyncSession, target_user_id: int) -> tuple[User, bool]:
     """
     Resets an employee's password to a new temporary password and sets must_change_password = True.
     Sends new credentials via email. Never returns plaintext password.
@@ -155,84 +154,65 @@ async def reset_employee_temp_password(
     return user, email_sent
 
 
-
-async def update_user_profile(
-    db: AsyncSession, user: User, user_update: UserUpdate
+async def set_user_reports_to(
+    db: AsyncSession, target_user_id: int, reports_to_id: int | None
 ) -> User:
     """
-    Updates the profile of the target user.
-    """
-    if user_update.full_name is not None:
-        user.full_name = user_update.full_name
-        await db.commit()
-        await db.refresh(user)
-    return user
-
-
-async def get_employees(db: AsyncSession) -> list[User]:
-    """
-    Fetches all users with role EMPLOYEE. Admin scope.
-    """
-    result = await db.execute(select(User).where(User.role == UserRole.EMPLOYEE))
-    return list(result.scalars().all())
-
-
-async def set_user_manager(
-    db: AsyncSession, target_user_id: int, manager_id: int | None
-) -> User:
-    """
-    Sets or updates the manager_id of target_user_id.
+    Sets or updates the reports_to_id of target_user_id.
     Enforces validation rules:
     1. Target user exists.
-    2. Proposed manager exists (if manager_id is not None).
-    3. User cannot be their own manager (manager_id != target_user_id).
-    4. Circular reporting chain detection (walking up the chain from proposed manager).
+    2. Proposed supervisor exists (if reports_to_id is not None).
+    3. User cannot report to themselves (reports_to_id != target_user_id).
+    4. Circular reporting chain detection (walking up the chain from proposed supervisor).
     """
     result = await db.execute(select(User).where(User.id == target_user_id))
     target_user = result.scalar_one_or_none()
     if not target_user:
         raise ResourceNotFoundException("User not found.")
 
-    if manager_id is None:
-        target_user.manager_id = None
+    if reports_to_id is None:
+        target_user.reports_to_id = None
         await db.commit()
         await db.refresh(target_user)
         return target_user
 
-    if manager_id == target_user_id:
-        raise BadRequestException("A user cannot be their own manager.")
+    if reports_to_id == target_user_id:
+        raise BadRequestException("A user cannot report to themselves.")
 
-    result = await db.execute(select(User).where(User.id == manager_id))
-    proposed_manager = result.scalar_one_or_none()
-    if not proposed_manager:
-        raise ResourceNotFoundException("Manager user not found.")
+    result = await db.execute(select(User).where(User.id == reports_to_id))
+    proposed_supervisor = result.scalar_one_or_none()
+    if not proposed_supervisor:
+        raise ResourceNotFoundException("Reports-to supervisor user not found.")
 
-    # Cycle detection: walk up the chain starting from proposed_manager
-    curr_manager = proposed_manager
+    # Cycle detection: walk up the chain starting from proposed_supervisor
+    curr_supervisor = proposed_supervisor
     visited_ids = {target_user_id}
-    while curr_manager:
-        if curr_manager.id in visited_ids:
-            raise BadRequestException("Circular manager hierarchy is not allowed.")
-        visited_ids.add(curr_manager.id)
-        if curr_manager.manager_id is None:
+    while curr_supervisor:
+        if curr_supervisor.id in visited_ids:
+            raise BadRequestException("Circular reporting hierarchy is not allowed.")
+        visited_ids.add(curr_supervisor.id)
+        if curr_supervisor.reports_to_id is None:
             break
-        if curr_manager.manager_id == target_user_id:
-            raise BadRequestException("Circular manager hierarchy is not allowed.")
-        res = await db.execute(select(User).where(User.id == curr_manager.manager_id))
-        curr_manager = res.scalar_one_or_none()
+        if curr_supervisor.reports_to_id == target_user_id:
+            raise BadRequestException("Circular reporting hierarchy is not allowed.")
+        res = await db.execute(select(User).where(User.id == curr_supervisor.reports_to_id))
+        curr_supervisor = res.scalar_one_or_none()
 
-    target_user.manager_id = manager_id
+    target_user.reports_to_id = reports_to_id
     await db.commit()
     await db.refresh(target_user)
     return target_user
 
 
+# Backward compatibility alias
+set_user_manager = set_user_reports_to
+
+
 async def get_user_direct_reports(db: AsyncSession, user_id: int) -> list[User]:
     """
-    Retrieves all users where manager_id == user_id.
+    Retrieves all users where reports_to_id == user_id.
     """
     result = await db.execute(
-        select(User).where(User.manager_id == user_id).order_by(User.full_name.asc())
+        select(User).where(User.reports_to_id == user_id).order_by(User.full_name.asc())
     )
     return list(result.scalars().all())
-

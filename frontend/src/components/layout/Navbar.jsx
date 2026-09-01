@@ -1,9 +1,9 @@
 import React from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { CheckSquare, Calendar, LayoutDashboard, Users } from 'lucide-react'
+import { CheckSquare, Calendar, LayoutDashboard, Users, Activity } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 
-export function Navbar({ rightSlot, title = 'employee task management', className = '' }) {
+export function Navbar({ rightSlot, title = 'Teamloom', className = '' }) {
   const user = useAuthStore((state) => state.user)
   const directReports = useAuthStore((state) => state.directReports)
   const location = useLocation()
@@ -14,20 +14,23 @@ export function Navbar({ rightSlot, title = 'employee task management', classNam
 
   const isTasksActive = location.pathname === homePath
   const isLeavesActive = location.pathname === leavesPath
+  const isEmployeesActive = location.pathname === '/admin/employees'
+  const isMyPerfActive = location.pathname === '/my-performance'
   const isMyTeamActive = location.pathname === '/my-team'
 
   return (
     <header className={`h-14 bg-[var(--surface-1)] border-b border-[var(--border)] px-4 flex items-center justify-between select-none ${className}`}>
       {/* Left Brand Logo & Navigation Links */}
       <div className="flex items-center gap-6">
-        <Link to={homePath} className="flex items-center gap-2.5 hover:opacity-90 transition-opacity">
+        {/* Brand Logo & Title (Non-interactive branding) */}
+        <div className="flex items-center gap-2.5">
           <div className="w-7 h-7 rounded-lg bg-[var(--surface-2)] border border-[var(--border-strong)] flex items-center justify-center text-[var(--accent)]">
             <CheckSquare className="w-4 h-4" />
           </div>
           <span className="text-sm font-medium text-[var(--text-primary)] tracking-tight hidden sm:inline">
             {title}
           </span>
-        </Link>
+        </div>
 
         {user && (
           <nav className="flex items-center gap-1">
@@ -53,6 +56,32 @@ export function Navbar({ rightSlot, title = 'employee task management', classNam
             >
               <Calendar className="w-3.5 h-3.5" />
               <span>{user.role === 'ADMIN' ? 'Leave Approval' : 'Leaves'}</span>
+            </Link>
+
+            {user.role === 'ADMIN' && (
+              <Link
+                to="/admin/employees"
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                  isEmployeesActive
+                    ? 'bg-[var(--surface-2)] text-[var(--accent)] border border-[var(--border)]'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)]/50'
+                }`}
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>Manage Employees</span>
+              </Link>
+            )}
+
+            <Link
+              to="/my-performance"
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                isMyPerfActive
+                  ? 'bg-[var(--surface-2)] text-[var(--accent)] border border-[var(--border)]'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)]/50'
+              }`}
+            >
+              <Activity className="w-3.5 h-3.5" />
+              <span>My performance</span>
             </Link>
 
             {hasReports && (

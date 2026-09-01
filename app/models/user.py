@@ -21,22 +21,25 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     role = Column(SQLEnum(UserRole), default=UserRole.EMPLOYEE, nullable=False)
-    manager_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    reports_to_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    designation = Column(String(100), nullable=True, default=None)
     employee_code = Column(String, unique=True, index=True, nullable=True)
     must_change_password = Column(Boolean, default=False, nullable=False)
+    failed_login_attempts = Column(Integer, default=0, nullable=False)
+    locked_until = Column(DateTime(timezone=True), nullable=True, default=None)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships (relationships mapped as strings to avoid circular import issues)
-    manager = relationship(
+    reports_to = relationship(
         "User",
         remote_side=[id],
-        foreign_keys=[manager_id],
+        foreign_keys=[reports_to_id],
         back_populates="direct_reports",
     )
     direct_reports = relationship(
         "User",
-        foreign_keys=[manager_id],
-        back_populates="manager",
+        foreign_keys=[reports_to_id],
+        back_populates="reports_to",
     )
     assigned_tasks = relationship(
         "Task",

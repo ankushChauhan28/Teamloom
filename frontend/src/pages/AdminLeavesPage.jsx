@@ -9,7 +9,7 @@ import { Spinner } from '../components/ui/Spinner';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Alert } from '../components/ui/Alert';
 import { LeaveRejectModal } from '../components/LeaveRejectModal';
-import { Check, X, Calendar, RefreshCw, Filter, Clock } from 'lucide-react';
+import { Check, X, Calendar, RefreshCw, Filter } from 'lucide-react';
 
 const STATUS_MAP = {
   PENDING: { variant: 'amber', label: 'Pending' },

@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
@@ -9,7 +9,7 @@ class TaskBase(BaseModel):
     title: str
     description: str
     priority: TaskPriority
-    due_date: date
+    due_datetime: datetime
 
 
 class TaskCreate(TaskBase):
@@ -21,7 +21,7 @@ class TaskUpdate(BaseModel):
     description: str | None = None
     status: TaskStatus | None = None
     priority: TaskPriority | None = None
-    due_date: date | None = None
+    due_datetime: datetime | None = None
     assigned_to: int | None = None
 
 
@@ -37,3 +37,4 @@ class TaskRead(TaskBase):
     assigned_to: int
     created_by: int
     created_at: datetime
+    completed_at: datetime | None = None

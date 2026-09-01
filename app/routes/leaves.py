@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_current_user, require_password_change_cleared, require_role
+from app.core.security import require_password_change_cleared
 from app.db.session import get_db
 from app.models.leave import LeaveStatus
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.schemas.leave import LeaveCreate, LeaveRead, LeaveUpdateStatus
 from app.services import leave_service
 

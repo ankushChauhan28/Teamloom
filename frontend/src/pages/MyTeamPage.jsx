@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { api } from '../lib/api';
+import { api, getPerformanceAnalytics } from '../lib/api';
 import { useAuthStore } from '../store/authStore';
 import { Navbar } from '../components/layout/Navbar';
 import { UserMenu } from '../components/layout/UserMenu';
@@ -9,9 +9,13 @@ import { Badge } from '../components/ui/Badge';
 import { Spinner } from '../components/ui/Spinner';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Alert } from '../components/ui/Alert';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/Card';
 import { TaskFormModal } from '../components/TaskFormModal';
 import { TaskDeleteModal } from '../components/TaskDeleteModal';
 import { LeaveRejectModal } from '../components/LeaveRejectModal';
+import { DueCountdown } from '../components/ui/DueCountdown';
+import { PerformanceRing } from '../components/PerformanceRing';
+import { MilestoneTrail } from '../components/MilestoneTrail';
 import {
   Users,
   Plus,
@@ -24,8 +28,9 @@ import {
   Edit3,
   Trash2,
   UserCheck,
+  Activity,
+  ArrowLeft,
 } from 'lucide-react';
-import { getRelativeDueDateInfo } from '../lib/dateUtils';
 
 const PRIORITY_MAP = {
   LOW: { variant: 'slate', label: 'Low' },
@@ -57,14 +62,14 @@ function calculateDurationDays(startStr, endStr) {
 }
 
 export function MyTeamPage() {
-  const { directReports: authStoreReports, fetchDirectReports } = useAuthStore();
+  const { directReports: authStoreReports, fetchDirectReports, user } = useAuthStore();
   const [reports, setReports] = useState(authStoreReports || []);
   const [teamTasks, setTeamTasks] = useState([]);
   const [teamLeaves, setTeamLeaves] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Active View Tab ('tasks' | 'leaves')
+  // Active View Tab ('tasks' | 'leaves' | 'performance')
   const [activeTab, setActiveTab] = useState('tasks');
 
   // Task Filter States
@@ -74,6 +79,12 @@ export function MyTeamPage() {
 
   // Leave Filter State
   const [leaveStatusFilter, setLeaveStatusFilter] = useState('PENDING');
+
+  // Performance Tab States
+  const [selectedEmployee, setSelectedEmployee] = useState(null);
+  const [perfStats, setPerfStats] = useState(null);
+  const [isPerfLoading, setIsPerfLoading] = useState(false);
+  const [perfError, setPerfError] = useState('');
 
   // Leave Action States
   const [leaveActionLoadingId, setLeaveActionLoadingId] = useState(null);
@@ -109,6 +120,28 @@ export function MyTeamPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Fetch Performance Analytics (Team aggregate or individual employee)
+  const fetchPerformanceData = useCallback(async (empId = null) => {
+    setIsPerfLoading(true);
+    setPerfError('');
+    try {
+      const params = empId ? { employee_id: empId } : {};
+      const data = await getPerformanceAnalytics(params);
+      setPerfStats(data);
+    } catch (err) {
+      const msg = err.response?.data?.detail || 'Failed to load team performance analytics.';
+      setPerfError(msg);
+    } finally {
+      setIsPerfLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'performance') {
+      fetchPerformanceData(selectedEmployee?.id || null);
+    }
+  }, [activeTab, selectedEmployee, fetchPerformanceData]);
 
   // Direct Report Map: ID -> User Object
   const reportMap = useMemo(() => {
@@ -174,10 +207,14 @@ export function MyTeamPage() {
     setIsTaskDeleteModalOpen(true);
   };
 
-  const reportOptions = reports.map((r) => ({
-    value: String(r.id),
-    label: `${r.full_name} (${r.employee_code || r.email})`,
-  }));
+  const reportOptions = reports.map((r) => {
+    const codeOrEmail = r.employee_code || r.email;
+    const desigSuffix = r.designation ? ` — ${r.designation}` : '';
+    return {
+      value: String(r.id),
+      label: `${r.full_name} (${codeOrEmail})${desigSuffix}`,
+    };
+  });
 
   return (
     <div className="min-h-screen bg-[var(--bg-page)] text-[var(--text-primary)] flex flex-col">
@@ -196,7 +233,7 @@ export function MyTeamPage() {
               </h1>
             </div>
             <p className="text-xs text-[var(--text-secondary)] mt-0.5">
-              Direct report roster, team task assignment, and manager leave approvals
+              Direct report roster, team task assignment, leave approvals, and performance analytics
             </p>
           </div>
 
@@ -225,6 +262,11 @@ export function MyTeamPage() {
               <UserCheck className="w-4 h-4 text-[var(--accent)]" />
               <span>Direct Reports ({reports.length})</span>
             </h2>
+            {selectedEmployee && (
+              <span className="text-xs text-[var(--accent)] font-medium">
+                Viewing: {selectedEmployee.full_name}
+              </span>
+            )}
           </div>
 
           {reports.length === 0 ? (
@@ -233,36 +275,50 @@ export function MyTeamPage() {
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              {reports.map((report) => (
-                <div
-                  key={report.id}
-                  className="bg-[var(--surface-2)]/60 border border-[var(--border)] rounded-lg p-3 flex items-center gap-3"
-                >
-                  <div className="w-9 h-9 rounded-full bg-[var(--accent-bg)] border border-[var(--accent)]/30 text-[var(--accent)] font-semibold flex items-center justify-center text-xs">
-                    {report.full_name ? report.full_name.charAt(0).toUpperCase() : 'U'}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-1">
-                      <span className="font-medium text-xs text-[var(--text-primary)] truncate">
-                        {report.full_name}
-                      </span>
-                      {report.employee_code && (
-                        <span className="text-[10px] font-mono bg-[var(--surface-1)] px-1.5 py-0.5 rounded border border-[var(--border)] text-[var(--accent)]">
-                          {report.employee_code}
+              {reports.map((report) => {
+                const isSelected = selectedEmployee?.id === report.id;
+                return (
+                  <div
+                    key={report.id}
+                    onClick={() => {
+                      if (activeTab === 'performance') {
+                        setSelectedEmployee(isSelected ? null : report);
+                      }
+                    }}
+                    className={`bg-[var(--surface-2)]/60 border rounded-lg p-3 flex items-center gap-3 transition-all ${
+                      activeTab === 'performance' ? 'cursor-pointer hover:border-[var(--accent)]' : ''
+                    } ${
+                      isSelected
+                        ? 'border-[var(--accent)] bg-[var(--surface-2)] ring-1 ring-[var(--accent)]'
+                        : 'border-[var(--border)]'
+                    }`}
+                  >
+                    <div className="w-9 h-9 rounded-full bg-[var(--accent-bg)] border border-[var(--accent)]/30 text-[var(--accent)] font-semibold flex items-center justify-center text-xs">
+                      {report.full_name ? report.full_name.charAt(0).toUpperCase() : 'U'}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="font-medium text-xs text-[var(--text-primary)] truncate">
+                          {report.full_name}
                         </span>
-                      )}
-                    </div>
-                    <div className="text-[11px] text-[var(--text-muted)] truncate mt-0.5">
-                      {report.email}
+                        {report.employee_code && (
+                          <span className="text-[10px] font-mono bg-[var(--surface-1)] px-1.5 py-0.5 rounded border border-[var(--border)] text-[var(--accent)]">
+                            {report.employee_code}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-[var(--text-muted)] truncate mt-0.5">
+                        {report.email}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
 
-        {/* Navigation Tabs (Team Tasks vs Team Leaves) */}
+        {/* Navigation Tabs (Team Tasks vs Team Leaves vs Team Performance) */}
         <div className="flex items-center gap-2 border-b border-[var(--border)] pb-1">
           <button
             onClick={() => setActiveTab('tasks')}
@@ -286,6 +342,18 @@ export function MyTeamPage() {
           >
             <Calendar className="w-3.5 h-3.5" />
             <span>Team Leave Requests ({teamLeaves.length})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('performance')}
+            className={`flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-t-lg transition-all ${
+              activeTab === 'performance'
+                ? 'bg-[var(--surface-1)] text-[var(--accent)] border-t border-x border-[var(--border)] -mb-px font-semibold'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            <Activity className="w-3.5 h-3.5" />
+            <span>Performance</span>
           </button>
         </div>
 
@@ -398,7 +466,6 @@ export function MyTeamPage() {
                         const assignee = reportMap[task.assigned_to];
                         const priorityInfo = PRIORITY_MAP[task.priority] || { variant: 'slate', label: task.priority };
                         const statusInfo = TASK_STATUS_MAP[task.status] || { variant: 'slate', label: task.status };
-                        const dueDateInfo = getRelativeDueDateInfo(task.due_date);
 
                         return (
                           <tr
@@ -446,18 +513,7 @@ export function MyTeamPage() {
                             </td>
 
                             <td className="py-3 px-4 whitespace-nowrap">
-                              <div className="flex flex-col">
-                                <span className="text-[var(--text-primary)]">
-                                  {task.due_date}
-                                </span>
-                                <span
-                                  className={`text-[10px] font-medium ${
-                                    dueDateInfo.isOverdue ? 'text-[var(--red)]' : 'text-[var(--text-muted)]'
-                                  }`}
-                                >
-                                  {dueDateInfo.label}
-                                </span>
-                              </div>
+                              <DueCountdown dueDatetime={task.due_datetime || task.due_date} status={task.status} />
                             </td>
 
                             <td className="py-3 px-4 text-right whitespace-nowrap">
@@ -673,6 +729,63 @@ export function MyTeamPage() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Tab 3: Team Performance Analytics */}
+        {activeTab === 'performance' && (
+          <div className="space-y-4">
+            {perfError && <Alert variant="danger">{perfError}</Alert>}
+
+            <Card className="space-y-6 p-6">
+              <CardHeader className="mb-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 w-full">
+                  <div>
+                    <CardTitle className="text-base font-semibold">
+                      {selectedEmployee
+                        ? `Individual Performance: ${selectedEmployee.full_name}`
+                        : user?.role === 'ADMIN'
+                        ? 'Organization-Wide Performance'
+                        : 'Team Performance Aggregate'}
+                    </CardTitle>
+                    <CardDescription>
+                      {selectedEmployee
+                        ? `Analytics for employee code ${selectedEmployee.employee_code || selectedEmployee.email}`
+                        : user?.role === 'ADMIN'
+                        ? 'Combined performance metrics across all tasks in the system'
+                        : 'Combined performance metrics across all direct reports'}
+                    </CardDescription>
+                  </div>
+
+                  {selectedEmployee && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setSelectedEmployee(null)}
+                      className="text-xs self-start sm:self-auto"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5 mr-1" /> Back to Team Aggregate
+                    </Button>
+                  )}
+                </div>
+              </CardHeader>
+
+              <CardContent className="space-y-8">
+                {isPerfLoading ? (
+                  <div className="py-16 flex flex-col items-center justify-center space-y-3">
+                    <Spinner size="lg" />
+                    <span className="text-xs text-[var(--text-muted)] animate-pulse">
+                      Loading performance metrics...
+                    </span>
+                  </div>
+                ) : perfStats ? (
+                  <>
+                    <PerformanceRing stats={perfStats} />
+                    <MilestoneTrail trail={perfStats.milestone_trail} />
+                  </>
+                ) : null}
+              </CardContent>
+            </Card>
           </div>
         )}
       </main>

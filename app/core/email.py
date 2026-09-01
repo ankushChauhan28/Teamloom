@@ -16,24 +16,18 @@ def send_employee_welcome_email(
     Returns True if sent successfully, False if SMTP is unconfigured or error occurs.
     Logs error server-side without logging the temporary password.
     """
-    if not (
-        settings.SMTP_HOST
-        and settings.SMTP_USERNAME
-        and settings.SMTP_APP_PASSWORD
-    ):
-        logger.warning(
-            f"SMTP is not configured. Unable to send welcome email to {email}."
-        )
+    if not (settings.SMTP_HOST and settings.SMTP_USERNAME and settings.SMTP_APP_PASSWORD):
+        logger.warning(f"SMTP is not configured. Unable to send welcome email to {email}.")
         return False
 
     from_email = settings.SMTP_FROM_EMAIL or settings.SMTP_USERNAME
     login_url = f"{settings.FRONTEND_URL}/login"
 
-    subject = "Welcome to Employee Task Management — Account Created"
+    subject = "Welcome to Teamloom — Account Created"
     body_html = f"""
     <html>
       <body style="font-family: sans-serif; color: #333;">
-        <h2>Welcome to Employee Task Management System</h2>
+        <h2>Welcome to Teamloom</h2>
         <p>Hello {full_name},</p>
         <p>Your account has been created by your administrator.</p>
         <div style="background-color: #f4f6f8; padding: 15px; border-radius: 8px; margin: 15px 0;">
