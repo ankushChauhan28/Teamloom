@@ -18,16 +18,26 @@ api.interceptors.request.use(
     if (accessToken) {
       config.headers.Authorization = `Bearer ${accessToken}`;
     }
+    console.log(`[API Request] ${config.method?.toUpperCase()} ${config.url}`);
     return config;
   },
-  (error) => Promise.reject(error)
+  (error) => {
+    console.error('[API Request Error]', error);
+    return Promise.reject(error);
+  }
 );
 
 // Response Interceptor: Handle 401 errors with silent token refresh
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    console.log(`[API Response Success] ${response.config.method?.toUpperCase()} ${response.config.url} -> HTTP ${response.status}`);
+    return response;
+  },
   async (error) => {
     const originalRequest = error.config;
+    const status = error.response?.status;
+    const detail = error.response?.data?.detail;
+    console.error(`[API Response Error] ${originalRequest?.method?.toUpperCase()} ${originalRequest?.url} -> HTTP ${status} | Detail:`, detail);
 
     // Guard against infinite retries and skip auth endpoints (login/refresh/register/logout)
     const isAuthEndpoint = originalRequest.url?.includes('/auth/');

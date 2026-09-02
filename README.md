@@ -13,19 +13,23 @@ A modern workforce task management platform featuring reporting hierarchy, perfo
 
 ## 📸 Overview & Screenshots
 
-<!-- NOTE: Replace placeholder image paths with actual screenshots of your running app -->
+![Teamloom Login Page](docs/screenshots/login.png)
+*Teamloom Login Page*
 
-![Dashboard Overview](docs/screenshots/dashboard.png)
-*Employee Task Management Dashboard with Live Deadline Ticker*
+![Task Control Panel](docs/screenshots/admin_tasks.png)
+*Admin's System-Wide Task Control Panel*
 
-![Admin Task Control Panel](docs/screenshots/admin_tasks.png)
-*System-Wide Administrative Task Control Panel*
+![Manage Employees Directory](docs/screenshots/admin_employees.png)
+*Admin's Manage Employees Directory (Provisioning, Designations & Hierarchy)*
 
-![Employee Provisioning Directory](docs/screenshots/admin_employees.png)
-*Administrative Employee Provisioning & Supervisory Directory*
+![My Team Portal](docs/screenshots/my_team.png)
+*Manager's "My Team" Page Showing Direct Reports*
 
-![Performance Analytics](docs/screenshots/my_performance.png)
-*Server-Side Computed Performance Ring & Milestone Trail*
+![My Performance Analytics](docs/screenshots/my_performance.png)
+*Personal Performance Analytics (Completion Ring & Milestone Trail)*
+
+![Leave Approval Queue](docs/screenshots/leave_approval.png)
+*Admin's Leave Request Approval Queue*
 
 🔗 **Live Demo**: [Coming Soon]
 

@@ -113,7 +113,7 @@ export function EmployeeFormModal({
   };
 
   const reportsToOptions = existingEmployees
-    .filter((emp) => emp.role === 'EMPLOYEE')
+    .filter((emp) => emp.role === 'EMPLOYEE' && emp.is_active !== false)
     .map((emp) => {
       const codeOrEmail = emp.employee_code || emp.email;
       const desigSuffix = emp.designation ? ` — ${emp.designation}` : '';

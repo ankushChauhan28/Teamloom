@@ -216,3 +216,46 @@ async def get_user_direct_reports(db: AsyncSession, user_id: int) -> list[User]:
         select(User).where(User.reports_to_id == user_id).order_by(User.full_name.asc())
     )
     return list(result.scalars().all())
+
+
+async def deactivate_user(db: AsyncSession, current_admin_id: int, target_user_id: int) -> User:
+    """
+    Deactivates a user account (is_active = False).
+    Admin cannot deactivate their own account.
+    Clears reports_to_id on any direct reports managed by the deactivated user.
+    """
+    if current_admin_id == target_user_id:
+        raise BadRequestException("An admin cannot deactivate their own account.")
+
+    result = await db.execute(select(User).where(User.id == target_user_id))
+    target_user = result.scalar_one_or_none()
+    if not target_user:
+        raise ResourceNotFoundException("User not found.")
+
+    target_user.is_active = False
+
+    # Clear reports_to_id on any direct reports of this user
+    direct_reports_res = await db.execute(select(User).where(User.reports_to_id == target_user_id))
+    direct_reports = direct_reports_res.scalars().all()
+    for report in direct_reports:
+        report.reports_to_id = None
+
+    await db.commit()
+    await db.refresh(target_user)
+    return target_user
+
+
+async def reactivate_user(db: AsyncSession, target_user_id: int) -> User:
+    """
+    Reactivates a user account (is_active = True).
+    """
+    result = await db.execute(select(User).where(User.id == target_user_id))
+    target_user = result.scalar_one_or_none()
+    if not target_user:
+        raise ResourceNotFoundException("User not found.")
+
+    target_user.is_active = True
+    await db.commit()
+    await db.refresh(target_user)
+    return target_user
+

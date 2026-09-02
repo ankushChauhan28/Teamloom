@@ -37,6 +37,7 @@ class EmployeeCreateResponse(BaseModel):
     reports_to_id: int | None = None
     designation: str | None = None
     must_change_password: bool
+    is_active: bool = True
     created_at: datetime
     email_sent: bool = False
 
@@ -76,6 +77,7 @@ class UserRead(UserBase):
     designation: str | None = None
     employee_code: str | None = None
     must_change_password: bool = False
+    is_active: bool = True
     created_at: datetime
 
 

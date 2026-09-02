@@ -117,3 +117,31 @@ async def set_user_reports_to(
     return await user_service.set_user_reports_to(
         db=db, target_user_id=user_id, reports_to_id=reports_to_in.reports_to_id
     )
+
+
+@router.patch("/{user_id}/deactivate", response_model=UserRead)
+async def deactivate_user(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(require_role(UserRole.ADMIN)),
+):
+    """
+    Deactivates a user account (is_active = False). Accessible by Admin only.
+    An admin cannot deactivate their own account.
+    """
+    return await user_service.deactivate_user(
+        db=db, current_admin_id=current_admin.id, target_user_id=user_id
+    )
+
+
+@router.patch("/{user_id}/reactivate", response_model=UserRead)
+async def reactivate_user(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_admin: User = Depends(require_role(UserRole.ADMIN)),
+):
+    """
+    Reactivates a user account (is_active = True). Accessible by Admin only.
+    """
+    return await user_service.reactivate_user(db=db, target_user_id=user_id)
+
