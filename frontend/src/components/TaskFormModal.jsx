@@ -130,7 +130,7 @@ export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null, 
   };
 
   const employeeOptions = employees
-    .filter((emp) => emp.role === 'EMPLOYEE')
+    .filter((emp) => emp.role === 'EMPLOYEE' && emp.is_active !== false)
     .map((emp) => {
       const codeOrEmail = emp.employee_code || emp.email;
       const desigSuffix = emp.designation ? ` — ${emp.designation}` : '';

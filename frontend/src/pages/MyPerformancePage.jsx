@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { getPerformanceAnalytics } from '../lib/api';
+import { useAuthStore } from '../store/authStore';
 import { Navbar } from '../components/layout/Navbar';
 import { UserMenu } from '../components/layout/UserMenu';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/Card';
@@ -11,15 +12,18 @@ import { MilestoneTrail } from '../components/MilestoneTrail';
 import { Activity, RefreshCw } from 'lucide-react';
 
 export function MyPerformancePage() {
+  const user = useAuthStore((state) => state.user);
   const [stats, setStats] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
 
   const fetchAnalytics = useCallback(async () => {
+    if (!user?.id) return;
     setIsLoading(true);
     setError('');
     try {
-      const data = await getPerformanceAnalytics();
+      // Explicitly pass user.id to guarantee backend resolves scope="self" for personal performance
+      const data = await getPerformanceAnalytics({ employee_id: user.id });
       setStats(data);
     } catch (err) {
       const msg = err.response?.data?.detail || 'Failed to load performance analytics. Please try again.';
@@ -27,11 +31,13 @@ export function MyPerformancePage() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
-    fetchAnalytics();
-  }, [fetchAnalytics]);
+    if (user?.id) {
+      fetchAnalytics();
+    }
+  }, [user?.id, fetchAnalytics]);
 
   return (
     <div className="min-h-screen bg-[var(--bg-page)] text-[var(--text-primary)] flex flex-col">

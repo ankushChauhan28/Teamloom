@@ -10,6 +10,14 @@ const ALERT_CONFIG = {
       borderColor: 'rgba(217, 105, 90, 0.25)',
     },
   },
+  danger: {
+    icon: AlertCircle,
+    style: {
+      backgroundColor: 'var(--red-bg)',
+      color: 'var(--red)',
+      borderColor: 'rgba(217, 105, 90, 0.25)',
+    },
+  },
   success: {
     icon: CheckCircle2,
     style: {

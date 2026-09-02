@@ -40,6 +40,12 @@ async def authenticate_user(db: AsyncSession, login_in: UserLogin) -> User:
         await db.commit()
         raise generic_error
 
+    # 1b. Deactivated user: run bcrypt & commit to match timing and DB I/O profile, return generic error
+    if not user.is_active:
+        verify_password(login_in.password, user.hashed_password)
+        await db.commit()
+        raise generic_error
+
     now = datetime.now(UTC)
 
     # 2. Check if account is currently locked
@@ -105,7 +111,7 @@ async def refresh_access_token(db: AsyncSession, refresh_token: str) -> tuple[st
 
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
-    if not user:
+    if not user or not user.is_active:
         raise AuthenticationException("User not found.")
 
     new_access_token = create_access_token(email=user.email, role=user.role.value)

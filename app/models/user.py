@@ -25,6 +25,7 @@ class User(Base):
     designation = Column(String(100), nullable=True, default=None)
     employee_code = Column(String, unique=True, index=True, nullable=True)
     must_change_password = Column(Boolean, default=False, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
     failed_login_attempts = Column(Integer, default=0, nullable=False)
     locked_until = Column(DateTime(timezone=True), nullable=True, default=None)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
