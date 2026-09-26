@@ -12,7 +12,6 @@ import { Alert } from '../components/ui/Alert';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/Card';
 import { TaskFormModal } from '../components/TaskFormModal';
 import { TaskDeleteModal } from '../components/TaskDeleteModal';
-import { LeaveRejectModal } from '../components/LeaveRejectModal';
 import { DueCountdown } from '../components/ui/DueCountdown';
 import { PerformanceRing } from '../components/PerformanceRing';
 import { MilestoneTrail } from '../components/MilestoneTrail';
@@ -23,8 +22,6 @@ import {
   Calendar,
   Filter,
   RefreshCw,
-  Check,
-  X,
   Edit3,
   Trash2,
   UserCheck,
@@ -86,10 +83,7 @@ export function MyTeamPage() {
   const [isPerfLoading, setIsPerfLoading] = useState(false);
   const [perfError, setPerfError] = useState('');
 
-  // Leave Action States
-  const [leaveActionLoadingId, setLeaveActionLoadingId] = useState(null);
-  const [leaveActionError, setLeaveActionError] = useState('');
-  const [rejectingLeave, setRejectingLeave] = useState(null);
+
 
   // Task Modal States
   const [isTaskFormModalOpen, setIsTaskFormModalOpen] = useState(false);
@@ -168,25 +162,7 @@ export function MyTeamPage() {
     return teamLeaves.filter((l) => l.status === leaveStatusFilter);
   }, [teamLeaves, leaveStatusFilter]);
 
-  // Leave Approval Handler
-  const handleApproveLeave = async (leaveId) => {
-    setLeaveActionError('');
-    setLeaveActionLoadingId(leaveId);
-    try {
-      const res = await api.patch(`/leaves/${leaveId}`, { status: 'APPROVED' });
-      const updatedLeave = res.data;
-      setTeamLeaves((prev) => prev.map((l) => (l.id === leaveId ? updatedLeave : l)));
-    } catch (err) {
-      const msg = err.response?.data?.detail || 'Failed to approve leave request.';
-      setLeaveActionError(msg);
-    } finally {
-      setLeaveActionLoadingId(null);
-    }
-  };
 
-  const handleLeaveRejected = (updatedLeave) => {
-    setTeamLeaves((prev) => prev.map((l) => (l.id === updatedLeave.id ? updatedLeave : l)));
-  };
 
   const handleTaskDeleted = (deletedTaskId) => {
     setTeamTasks((prev) => prev.filter((t) => t.id !== deletedTaskId));
@@ -549,11 +525,9 @@ export function MyTeamPage() {
           </div>
         )}
 
-        {/* Tab 2: Team Leave Requests */}
+        {/* Tab 2: Team Leave Requests (Read-only for managers) */}
         {activeTab === 'leaves' && (
           <div className="space-y-4">
-            {leaveActionError && <Alert variant="danger">{leaveActionError}</Alert>}
-
             {/* Filter Bar */}
             <div className="bg-[var(--surface-1)] p-4 rounded-xl border border-[var(--border)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex flex-wrap items-center gap-3 flex-1">
@@ -575,9 +549,14 @@ export function MyTeamPage() {
                 />
               </div>
 
-              <span className="text-xs text-[var(--text-muted)] font-medium">
-                Showing {filteredLeaves.length} of {teamLeaves.length} requests
-              </span>
+              <div className="flex flex-col sm:items-end gap-0.5">
+                <span className="text-xs text-[var(--text-muted)] font-medium">
+                  Showing {filteredLeaves.length} of {teamLeaves.length} requests
+                </span>
+                <span className="text-[11px] text-[var(--text-muted)] italic">
+                  Approvals handled by Tier 1 Admin only
+                </span>
+              </div>
             </div>
 
             {/* Content Table / Empty State */}
@@ -617,8 +596,7 @@ export function MyTeamPage() {
                         <th className="py-3 px-4">Date Range</th>
                         <th className="py-3 px-4">Reason</th>
                         <th className="py-3 px-4">Status</th>
-                        <th className="py-3 px-4">Submitted On</th>
-                        <th className="py-3 px-4 text-right">Actions</th>
+                        <th className="py-3 px-4 text-right">Submitted On</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[var(--border)] text-xs">
@@ -631,9 +609,6 @@ export function MyTeamPage() {
                           day: 'numeric',
                           year: 'numeric',
                         });
-
-                        const isPending = leave.status === 'PENDING';
-                        const isRowActionLoading = leaveActionLoadingId === leave.id;
 
                         return (
                           <tr
@@ -680,46 +655,8 @@ export function MyTeamPage() {
                               </Badge>
                             </td>
 
-                            <td className="py-3 px-4 whitespace-nowrap text-[var(--text-muted)]">
+                            <td className="py-3 px-4 whitespace-nowrap text-right text-[var(--text-muted)]">
                               {submittedAt}
-                            </td>
-
-                            <td className="py-3 px-4 text-right whitespace-nowrap">
-                              {isPending ? (
-                                <div className="flex items-center justify-end gap-1.5">
-                                  {isRowActionLoading ? (
-                                    <div className="flex items-center gap-1 text-[var(--accent)] text-[11px] px-2 py-1">
-                                      <Spinner size="sm" />
-                                      <span>Saving...</span>
-                                    </div>
-                                  ) : (
-                                    <>
-                                      <Button
-                                        variant="secondary"
-                                        size="sm"
-                                        onClick={() => handleApproveLeave(leave.id)}
-                                        className="px-2.5 py-1 text-xs text-[var(--green)] hover:text-[var(--green)] hover:bg-[var(--green-bg)] border-[var(--border)]"
-                                        title="Approve Leave"
-                                      >
-                                        <Check className="w-3.5 h-3.5 mr-1" /> Approve
-                                      </Button>
-                                      <Button
-                                        variant="danger"
-                                        size="sm"
-                                        onClick={() => setRejectingLeave(leave)}
-                                        className="px-2.5 py-1 text-xs"
-                                        title="Reject Leave"
-                                      >
-                                        <X className="w-3.5 h-3.5 mr-1" /> Reject
-                                      </Button>
-                                    </>
-                                  )}
-                                </div>
-                              ) : (
-                                <span className="text-[11px] text-[var(--text-muted)] italic">
-                                  Reviewed
-                                </span>
-                              )}
                             </td>
                           </tr>
                         );
@@ -807,14 +744,6 @@ export function MyTeamPage() {
         task={deletingTask}
       />
 
-      {/* Leave Rejection Confirmation Modal */}
-      <LeaveRejectModal
-        isOpen={Boolean(rejectingLeave)}
-        onClose={() => setRejectingLeave(null)}
-        onSuccess={handleLeaveRejected}
-        leave={rejectingLeave}
-        employee={rejectingLeave ? reportMap[rejectingLeave.employee_id] : null}
-      />
     </div>
   );
 }

@@ -9,6 +9,7 @@ export function Navbar({ rightSlot, title = 'Teamloom', className = '' }) {
   const location = useLocation()
 
   const hasReports = (directReports || []).length > 0
+  const isManager = user?.access_level <= 2 || hasReports
   const homePath = user?.role === 'ADMIN' ? '/admin/tasks' : '/dashboard'
   const leavesPath = user?.role === 'ADMIN' ? '/admin/leaves' : '/leaves'
 
@@ -72,19 +73,21 @@ export function Navbar({ rightSlot, title = 'Teamloom', className = '' }) {
               </Link>
             )}
 
-            <Link
-              to="/my-performance"
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                isMyPerfActive
-                  ? 'bg-[var(--surface-2)] text-[var(--accent)] border border-[var(--border)]'
-                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)]/50'
-              }`}
-            >
-              <Activity className="w-3.5 h-3.5" />
-              <span>My performance</span>
-            </Link>
+            {user?.access_level !== 1 && (
+              <Link
+                to="/my-performance"
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                  isMyPerfActive
+                    ? 'bg-[var(--surface-2)] text-[var(--accent)] border border-[var(--border)]'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)]/50'
+                }`}
+              >
+                <Activity className="w-3.5 h-3.5" />
+                <span>My performance</span>
+              </Link>
+            )}
 
-            {hasReports && (
+            {isManager && (
               <Link
                 to="/my-team"
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${

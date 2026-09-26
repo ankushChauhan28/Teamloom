@@ -31,6 +31,11 @@ export function TaskCard({ task, onStatusChange }) {
     const newStatus = e.target.value;
     if (newStatus === task.status) return;
 
+    if (task.status === 'COMPLETED') {
+      setUpdateError('Cannot modify a completed task.');
+      return;
+    }
+
     setUpdateError('');
     setIsUpdating(true);
     try {
@@ -85,17 +90,24 @@ export function TaskCard({ task, onStatusChange }) {
                 <span className="text-[11px]">Updating...</span>
               </div>
             ) : (
-              <Select
-                value={task.status}
-                onChange={handleStatusSelect}
-                disabled={isUpdating}
-                className="py-1 px-2 text-xs h-8 max-w-[140px]"
-                options={[
-                  { value: 'PENDING', label: 'Pending' },
-                  { value: 'IN_PROGRESS', label: 'In Progress' },
-                  { value: 'COMPLETED', label: 'Completed' },
-                ]}
-              />
+              <div
+                title={task.status === 'COMPLETED' ? 'Task is completed' : undefined}
+                className={task.status === 'COMPLETED' ? 'cursor-not-allowed' : ''}
+              >
+                <Select
+                  value={task.status}
+                  onChange={handleStatusSelect}
+                  disabled={isUpdating || task.status === 'COMPLETED'}
+                  className={`py-1 px-2 text-xs h-8 max-w-[140px] ${
+                    task.status === 'COMPLETED' ? 'opacity-60 cursor-not-allowed pointer-events-none' : ''
+                  }`}
+                  options={[
+                    { value: 'PENDING', label: 'Pending' },
+                    { value: 'IN_PROGRESS', label: 'In Progress' },
+                    { value: 'COMPLETED', label: 'Completed' },
+                  ]}
+                />
+              </div>
             )}
           </div>
         </div>

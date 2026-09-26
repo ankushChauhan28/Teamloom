@@ -22,9 +22,11 @@ export function ManagerRoute({ children }) {
     return <Navigate to="/change-password" replace />;
   }
 
-  const hasReports = (directReports || []).length > 0;
-  if (!hasReports) {
-    return <Navigate to={user?.role === 'ADMIN' ? '/admin/tasks' : '/dashboard'} replace />;
+  // Allow if Tier 2 or below, OR has direct reports
+  const isManager = user?.access_level <= 2 || (directReports || []).length > 0;
+
+  if (!isManager) {
+    return <Navigate to="/dashboard" replace />;
   }
 
   return children ? children : <Outlet />;

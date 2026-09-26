@@ -64,16 +64,21 @@ export const useAuthStore = create((set, get) => ({
       userData = { ...userData, must_change_password };
     }
 
+    // Cache direct reports in memory state
+    const cachedReports = userData.direct_reports_ids || userData.direct_reports || [];
+    userData.direct_reports = cachedReports;
+
+    // Fetch reports FIRST before setting isLoading: false
+    const reports = !userData.must_change_password ? await get().fetchDirectReports() : [];
+
     set({
       user: userData,
       accessToken: access_token,
       isAuthenticated: true,
+      effectiveTier: userData.effective_tier || userData.access_level || 3,
+      directReports: reports,
       isLoading: false,
     });
-
-    if (!userData.must_change_password) {
-      await get().fetchDirectReports();
-    }
 
     return userData;
   },
@@ -123,16 +128,17 @@ export const useAuthStore = create((set, get) => ({
         const userRes = await api.get('/users/me');
         const userData = userRes.data;
 
+        // Fetch reports FIRST before setting isLoading: false
+        const reports = !userData.must_change_password ? await get().fetchDirectReports() : [];
+
         set({
           user: userData,
           accessToken: token,
           isAuthenticated: true,
+          effectiveTier: userData.effective_tier || userData.access_level || 3,
+          directReports: reports,
           isLoading: false,
         });
-
-        if (!userData.must_change_password) {
-          await get().fetchDirectReports();
-        }
 
         return true;
       } catch (userErr) {

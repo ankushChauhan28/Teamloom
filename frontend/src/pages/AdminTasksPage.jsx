@@ -39,6 +39,9 @@ export function AdminTasksPage() {
   const [priorityFilter, setPriorityFilter] = useState('ALL');
   const [employeeFilter, setEmployeeFilter] = useState('ALL');
 
+  // Auto-polling timestamp state
+  const [lastUpdated, setLastUpdated] = useState(new Date());
+
   // Modal States
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
@@ -47,8 +50,8 @@ export function AdminTasksPage() {
   const [deletingTask, setDeletingTask] = useState(null);
 
   // Fetch all tasks system-wide & employee user list
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
+  const fetchData = useCallback(async (isSilent = false) => {
+    if (!isSilent) setIsLoading(true);
     setError('');
     try {
       const [tasksRes, usersRes] = await Promise.all([
@@ -57,16 +60,22 @@ export function AdminTasksPage() {
       ]);
       setTasks(tasksRes.data);
       setEmployees(usersRes.data);
+      setLastUpdated(new Date());
     } catch (err) {
       const msg = err.response?.data?.detail || 'Failed to load system tasks. Please try again.';
       setError(msg);
     } finally {
-      setIsLoading(false);
+      if (!isSilent) setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
     fetchData();
+    const intervalId = setInterval(() => {
+      fetchData(true);
+      setLastUpdated(new Date());
+    }, 10000);
+    return () => clearInterval(intervalId);
   }, [fetchData]);
 
   // Employee Map: ID -> Employee Object
@@ -122,9 +131,14 @@ export function AdminTasksPage() {
         {/* Page Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[var(--border)]">
           <div>
-            <h1 className="text-xl font-semibold text-[var(--text-primary)]">
-              Task Control Panel
-            </h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-xl font-semibold text-[var(--text-primary)]">
+                Task Control Panel
+              </h1>
+              <span className="text-xs text-[var(--text-secondary)]">
+                Last updated: {lastUpdated.toLocaleTimeString()}
+              </span>
+            </div>
             <p className="text-xs text-[var(--text-secondary)] mt-0.5">
               System-wide admin management for assigning, updating, and removing employee tasks
             </p>
@@ -185,7 +199,7 @@ export function AdminTasksPage() {
             <span className="text-xs text-[var(--text-muted)] font-medium">
               Showing {filteredTasks.length} of {tasks.length} tasks
             </span>
-            <Button variant="ghost" size="sm" onClick={fetchData} className="text-xs text-[var(--text-muted)]">
+            <Button variant="ghost" size="sm" onClick={() => fetchData(false)} className="text-xs text-[var(--text-muted)]">
               <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
             </Button>
           </div>

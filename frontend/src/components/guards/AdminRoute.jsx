@@ -22,7 +22,7 @@ export function AdminRoute({ children }) {
     return <Navigate to="/change-password" replace />;
   }
 
-  if (user?.role !== 'ADMIN') {
+  if (user?.access_level !== 1 && user?.role !== 'ADMIN') {
     return <Navigate to="/dashboard" replace />;
   }
 
