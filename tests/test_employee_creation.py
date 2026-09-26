@@ -8,6 +8,8 @@ import pytest
 from fastapi import status
 from httpx import AsyncClient
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models.user import User
 
 
@@ -249,3 +251,32 @@ async def test_pending_password_change_blocked_on_users_me(
     )
     assert patch_me_res.status_code == status.HTTP_403_FORBIDDEN
     assert patch_me_res.json()["detail"] == "password_change_required"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_employee_creation_no_duplicate_codes(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+) -> None:
+    """
+    Audit & Security Test: Fires 5 simultaneous POST /users/employees requests via asyncio.gather()
+    and asserts all 5 generated employee_code values are unique and returned with HTTP 201.
+    """
+    import asyncio
+
+    async def create_one(i: int):
+        return await client.post(
+            "/users/employees",
+            json={"full_name": f"Concurrent User {i}", "email": f"concurrent{i}@example.com"},
+            headers=admin_headers,
+        )
+
+    responses = await asyncio.gather(*[create_one(i) for i in range(5)])
+    for res in responses:
+        assert res.status_code == status.HTTP_201_CREATED
+
+    codes = [res.json()["employee_code"] for res in responses]
+    assert len(codes) == 5
+    assert len(set(codes)) == 5
+
+

@@ -2,8 +2,11 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.core.exceptions import (
+    AppException,
     AuthorizationException,
     BadRequestException,
     ResourceNotFoundException,
@@ -11,12 +14,13 @@ from app.core.exceptions import (
 from app.models.task import Task, TaskPriority, TaskStatus
 from app.models.user import User, UserRole
 from app.schemas.task import TaskCreate, TaskUpdate, TaskUpdateStatus
+from app.services.permission_service import can_manage_specific_user
 
 
 async def create_task(db: AsyncSession, task_in: TaskCreate, creator: User) -> Task:
     """
     Creates and assigns a task.
-    Accessible by Admin OR any user who is the direct manager of the assigned_to employee.
+    Accessible by Tier 1 OR any user who has managerial authority over the target employee.
     """
     # Verify assignee exists
     result = await db.execute(select(User).where(User.id == task_in.assigned_to))
@@ -24,14 +28,15 @@ async def create_task(db: AsyncSession, task_in: TaskCreate, creator: User) -> T
     if not assignee:
         raise ResourceNotFoundException(f"Assigned user with ID {task_in.assigned_to} not found.")
 
-    # Business validation: Check if assignee is an employee
-    if assignee.role != UserRole.EMPLOYEE:
+    # Business validation: Check if assignee is an employee (cannot assign to tier 1 admin)
+    is_assignee_admin = getattr(assignee, "access_level", None) == 1 or assignee.role != UserRole.EMPLOYEE
+    if is_assignee_admin:
         raise BadRequestException("Tasks can only be assigned to users with the EMPLOYEE role.")
 
-    is_admin = creator.role == UserRole.ADMIN
-    is_direct_manager = assignee.reports_to_id == creator.id
+    is_admin = getattr(creator, "access_level", None) == 1 or creator.role == UserRole.ADMIN
+    is_authorized_manager = can_manage_specific_user(creator, assignee)
 
-    if not (is_admin or is_direct_manager):
+    if not (is_admin or is_authorized_manager):
         raise AuthorizationException("You do not have permission to assign tasks to this employee.")
 
     # Defense-in-depth: Self-assignment via manager path blocked
@@ -74,7 +79,11 @@ async def get_team_tasks(
     if not report_ids:
         return []
 
-    stmt = select(Task).where(Task.assigned_to.in_(report_ids))
+    stmt = (
+        select(Task)
+        .where(Task.assigned_to.in_(report_ids))
+        .options(selectinload(Task.assigned_to_user))
+    )
 
     if status:
         stmt = stmt.where(Task.status == status)
@@ -104,10 +113,11 @@ async def get_tasks(
     Lists tasks. Admins see all, employees see only their own assigned tasks.
     Supports filtering, sorting, and pagination.
     """
-    stmt = select(Task)
+    stmt = select(Task).options(selectinload(Task.assigned_to_user))
 
-    # Role check: Employee sees only their own assigned tasks
-    if user.role == UserRole.EMPLOYEE:
+    # Tier / Role check: Tier 1 sees all, others see only their own assigned tasks
+    is_admin = getattr(user, "access_level", None) == 1 or user.role == UserRole.ADMIN
+    if not is_admin:
         stmt = stmt.where(Task.assigned_to == user.id)
 
     # Filters
@@ -135,7 +145,7 @@ async def get_tasks(
 
 async def get_task_by_id(db: AsyncSession, task_id: int, user: User) -> Task:
     """
-    Retrieves a single task by ID. Performs ownership validation for Employees.
+    Retrieves a single task by ID. Performs ownership validation for non-admin tiers.
     """
     result = await db.execute(select(Task).where(Task.id == task_id))
     db_task = result.scalar_one_or_none()
@@ -143,7 +153,8 @@ async def get_task_by_id(db: AsyncSession, task_id: int, user: User) -> Task:
         raise ResourceNotFoundException(f"Task with ID {task_id} not found.")
 
     # Ownership Check
-    if user.role == UserRole.EMPLOYEE and db_task.assigned_to != user.id:
+    is_admin = getattr(user, "access_level", None) == 1 or user.role == UserRole.ADMIN
+    if not is_admin and db_task.assigned_to != user.id:
         raise AuthorizationException("You are not authorized to view this task.")
 
     return db_task
@@ -153,19 +164,24 @@ async def update_task(
     db: AsyncSession, task_id: int, task_update: TaskUpdate | TaskUpdateStatus, user: User
 ) -> Task:
     """
-    Updates a task. Admin can update any field; Employee can only update status.
+    Updates a task. Tier 1 can update any field; non-admin can only update status.
     Automatically sets completed_at timestamp when status transitions to COMPLETED.
     """
     db_task = await get_task_by_id(db, task_id, user)
 
     update_data = task_update.model_dump(exclude_unset=True)
 
-    # Enforce update constraints for Employee
-    if user.role == UserRole.EMPLOYEE:
-        # Only status field is allowed for employees
+    # Enforce update constraints for non-admin
+    is_admin = getattr(user, "access_level", None) == 1 or user.role == UserRole.ADMIN
+    if not is_admin:
+        # Only status field is allowed for non-admin
         invalid_keys = [k for k in update_data.keys() if k != "status"]
         if invalid_keys:
             raise AuthorizationException("Employees are only permitted to update the task status.")
+
+    # Prevent modifications on already COMPLETED tasks
+    if (db_task.status == "COMPLETED" or db_task.status == TaskStatus.COMPLETED) and "status" in update_data:
+        raise AppException(status_code=400, detail="Cannot modify a completed task.")
 
     # Status transition logic for completed_at timestamp
     if "status" in update_data:
@@ -179,16 +195,24 @@ async def update_task(
     for key, value in update_data.items():
         setattr(db_task, key, value)
 
-    await db.commit()
-    await db.refresh(db_task)
-    return db_task
+    try:
+        await db.commit()
+        await db.refresh(db_task)
+        return db_task
+    except StaleDataError:
+        await db.rollback()
+        raise AppException(
+            status_code=409,
+            detail="Task was modified concurrently. Please refresh and retry.",
+        )
 
 
 async def delete_task(db: AsyncSession, task_id: int, user: User) -> None:
     """
-    Deletes a task. Admin only (checked at route level, but enforced here too).
+    Deletes a task. Tier 1 only.
     """
-    if user.role != UserRole.ADMIN:
+    is_admin = getattr(user, "access_level", None) == 1 or user.role == UserRole.ADMIN
+    if not is_admin:
         raise AuthorizationException("Only administrators can delete tasks.")
 
     result = await db.execute(select(Task).where(Task.id == task_id))

@@ -248,3 +248,124 @@ async def test_fresh_user_with_correct_credentials_logs_in_successfully(
     assert "access_token" in data
     assert data["token_type"] == "bearer"
     assert data["user"]["employee_code"] == employee_user.employee_code
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_ignores_spoofed_header_without_trusted_proxy(
+    client: AsyncClient,
+    employee_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    V-02 Test: Ensure attackers cannot bypass rate limiting by rotating X-Forwarded-For
+    headers when requests come from an untrusted client IP (TRUSTED_PROXY_IPS is empty).
+    All requests are attributed to the direct connection host (127.0.0.1).
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_IPS", [])
+
+    for i in range(10):
+        res = await client.post(
+            "/auth/login",
+            json={"employee_code": f"EMP-999{i}", "password": "WrongPassword!"},
+            headers={"X-Forwarded-For": f"198.51.100.{i}"},
+        )
+        assert res.status_code != status.HTTP_429_TOO_MANY_REQUESTS
+
+    # 11th request with yet another spoofed IP must still be blocked with 429
+    res_11th = await client.post(
+        "/auth/login",
+        json={"employee_code": employee_user.employee_code, "password": "WrongPassword!"},
+        headers={"X-Forwarded-For": "198.51.100.254"},
+    )
+    assert res_11th.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+    assert "retry-after" in res_11th.headers
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_uses_forwarded_header_when_proxy_trusted(
+    client: AsyncClient,
+    employee_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    V-02 Test: When the direct client host is in TRUSTED_PROXY_IPS (e.g. 127.0.0.1),
+    extract_client_ip parses X-Forwarded-For and applies rate limiting to the forwarded IP.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_IPS", ["127.0.0.1"])
+
+    client_ip_a = "203.0.113.10"
+    client_ip_b = "203.0.113.20"
+
+    # 10 requests from client A behind trusted proxy
+    for i in range(10):
+        res = await client.post(
+            "/auth/login",
+            json={"employee_code": f"EMP-888{i}", "password": "WrongPassword!"},
+            headers={"X-Forwarded-For": f"{client_ip_a}, 127.0.0.1"},
+        )
+        assert res.status_code != status.HTTP_429_TOO_MANY_REQUESTS
+
+    # 11th request from client A hits 429
+    res_a_blocked = await client.post(
+        "/auth/login",
+        json={"employee_code": employee_user.employee_code, "password": "WrongPassword!"},
+        headers={"X-Forwarded-For": client_ip_a},
+    )
+    assert res_a_blocked.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+
+    # Request from client B behind same proxy is NOT blocked
+    res_b_allowed = await client.post(
+        "/auth/login",
+        json={"employee_code": employee_user.employee_code, "password": "WrongPassword!"},
+        headers={"X-Forwarded-For": client_ip_b},
+    )
+    assert res_b_allowed.status_code != status.HTTP_429_TOO_MANY_REQUESTS
+
+
+@pytest.mark.asyncio
+async def test_redis_rate_limiter_shares_state_across_instances() -> None:
+    """
+    V-03 Test: Demonstrates that two separate RedisRateLimiter instances (simulating
+    two independent Uvicorn worker processes or cluster nodes) share counter state
+    via Redis (tested via fakeredis), preventing horizontal scale rate limiter bypass.
+    """
+    import fakeredis.aioredis
+    from app.core.rate_limit import RedisRateLimiter
+
+    fake_server = fakeredis.FakeServer()
+    client_worker1 = fakeredis.aioredis.FakeRedis(server=fake_server, decode_responses=True)
+    client_worker2 = fakeredis.aioredis.FakeRedis(server=fake_server, decode_responses=True)
+
+    worker_1 = RedisRateLimiter(max_requests=10, window_seconds=60, redis_client=client_worker1)
+    worker_2 = RedisRateLimiter(max_requests=10, window_seconds=60, redis_client=client_worker2)
+
+    # Worker 1 processes 6 requests from IP
+    for _ in range(6):
+        res = await worker_1.check_and_increment("client-192.168.1.1")
+        assert res.allowed is True
+
+    # Worker 2 processes 4 requests from same IP
+    for _ in range(4):
+        res = await worker_2.check_and_increment("client-192.168.1.1")
+        assert res.allowed is True
+
+    # 11th request processed by Worker 1 is BLOCKED because Worker 2 contributed to shared state
+    res_11th = await worker_1.check_and_increment("client-192.168.1.1")
+    assert res_11th.allowed is False
+    assert res_11th.retry_after_seconds > 0
+
+    # Distinct IP processed by Worker 2 is allowed
+    res_other = await worker_2.check_and_increment("client-10.0.0.1")
+    assert res_other.allowed is True
+
+    # Test reset() functionality
+    await worker_1.reset()
+    res_after_reset = await worker_2.check_and_increment("client-192.168.1.1")
+    assert res_after_reset.allowed is True
+
+    await client_worker1.aclose()
+    await client_worker2.aclose()

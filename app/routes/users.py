@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import require_password_change_cleared, require_role
+from app.core.security import require_password_change_cleared
 from app.db.session import get_db
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.schemas.user import (
     EmployeeCreate,
     EmployeeCreateResponse,
@@ -12,16 +12,23 @@ from app.schemas.user import (
     UserUpdate,
 )
 from app.services import user_service
+from app.services.permission_service import (
+    check_access_level_dependency,
+    populate_user_effective_cache,
+)
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
 
 @router.get("/me", response_model=UserRead)
-async def get_me(current_user: User = Depends(require_password_change_cleared)):
+async def get_me(
+    current_user: User = Depends(require_password_change_cleared),
+    db: AsyncSession = Depends(get_db),
+):
     """
-    Retrieve the current logged-in user's profile.
+    Retrieve the current logged-in user's profile with cached direct reports.
     """
-    return current_user
+    return await populate_user_effective_cache(current_user, db)
 
 
 @router.get("/me/reports", response_model=list[UserRead])
@@ -52,10 +59,10 @@ async def update_me(
 @router.get("/", response_model=list[UserRead])
 async def list_employees(
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_role(UserRole.ADMIN)),
+    current_admin: User = Depends(check_access_level_dependency(1)),
 ):
     """
-    List all employees in the system. Accessible by Admin only.
+    List all employees in the system. Accessible by Tier 1 only.
     """
     return await user_service.get_employees(db=db)
 
@@ -66,10 +73,10 @@ async def list_employees(
 async def create_employee(
     employee_in: EmployeeCreate,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_role(UserRole.ADMIN)),
+    current_admin: User = Depends(check_access_level_dependency(1)),
 ):
     """
-    Add a new employee account. Accessible by Admin only.
+    Add a new employee account. Accessible by Tier 1 only.
     Generates employee_code, temporary password, and sends welcome email.
     Never returns plaintext password in API response.
     """
@@ -80,6 +87,7 @@ async def create_employee(
         email=new_user.email,
         employee_code=new_user.employee_code,
         role=new_user.role,
+        access_level=new_user.access_level,
         reports_to_id=new_user.reports_to_id,
         designation=new_user.designation,
         must_change_password=new_user.must_change_password,
@@ -92,11 +100,11 @@ async def create_employee(
 async def reset_employee_temp_password(
     user_id: int,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_role(UserRole.ADMIN)),
+    current_admin: User = Depends(check_access_level_dependency(1)),
 ):
     """
     Resets an employee's password to a new temporary password and resends email.
-    Accessible by Admin only.
+    Accessible by Tier 1 only.
     """
     user, email_sent = await user_service.reset_employee_temp_password(
         db=db, target_user_id=user_id
@@ -109,10 +117,10 @@ async def set_user_reports_to(
     user_id: int,
     reports_to_in: UserReportsToUpdate,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_role(UserRole.ADMIN)),
+    current_admin: User = Depends(check_access_level_dependency(1)),
 ):
     """
-    Set or update a user's reports-to supervisor. Accessible by Admin only.
+    Set or update a user's reports-to supervisor. Accessible by Tier 1 only.
     """
     return await user_service.set_user_reports_to(
         db=db, target_user_id=user_id, reports_to_id=reports_to_in.reports_to_id
@@ -123,10 +131,10 @@ async def set_user_reports_to(
 async def deactivate_user(
     user_id: int,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_role(UserRole.ADMIN)),
+    current_admin: User = Depends(check_access_level_dependency(1)),
 ):
     """
-    Deactivates a user account (is_active = False). Accessible by Admin only.
+    Deactivates a user account (is_active = False). Accessible by Tier 1 only.
     An admin cannot deactivate their own account.
     """
     return await user_service.deactivate_user(
@@ -138,10 +146,11 @@ async def deactivate_user(
 async def reactivate_user(
     user_id: int,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_role(UserRole.ADMIN)),
+    current_admin: User = Depends(check_access_level_dependency(1)),
 ):
     """
-    Reactivates a user account (is_active = True). Accessible by Admin only.
+    Reactivates a user account (is_active = True). Accessible by Tier 1 only.
     """
     return await user_service.reactivate_user(db=db, target_user_id=user_id)
+
 

@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     # CORS Origins can be a JSON-formatted list or a comma-separated string
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]
 
+    # Trusted Proxy IPs (e.g. Nginx, Cloudflare reverse proxy IPs)
+    TRUSTED_PROXY_IPS: list[str] = []
+
+    # Rate Limiting Configuration
+    REDIS_URL: str = "redis://localhost:6379/0"
+    RATE_LIMITER_BACKEND: str = "memory"
+
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
     def assemble_database_url(cls, v: str) -> str:
@@ -38,6 +45,21 @@ class Settings(BaseSettings):
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def assemble_cors_origins(cls, v: str | list[str]) -> list[str]:
+        if isinstance(v, str):
+            try:
+                decoded = json.loads(v)
+                if isinstance(decoded, list):
+                    return decoded
+            except json.JSONDecodeError:
+                pass
+            return [i.strip() for i in v.split(",") if i.strip()]
+        return v
+
+    @field_validator("TRUSTED_PROXY_IPS", mode="before")
+    @classmethod
+    def assemble_trusted_proxy_ips(cls, v: str | list[str] | None) -> list[str]:
+        if v is None or v == "":
+            return []
         if isinstance(v, str):
             try:
                 decoded = json.loads(v)

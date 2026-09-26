@@ -10,18 +10,23 @@ from app.db.session import get_db
 from app.models.user import User
 from app.schemas.user import PasswordChange, Token, UserLogin, UserRead
 from app.services import auth_service
+from app.services.permission_service import populate_user_effective_cache
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
 def extract_client_ip(request: Request) -> str:
-    """Extracts client IP from X-Forwarded-For header or request client host."""
-    x_forwarded_for = request.headers.get("X-Forwarded-For")
-    if x_forwarded_for:
-        return x_forwarded_for.split(",")[0].strip()
-    if request.client and request.client.host:
-        return request.client.host
-    return "127.0.0.1"
+    """
+    Extracts client IP address:
+    - Only trusts X-Forwarded-For if request.client.host is in TRUSTED_PROXY_IPS.
+    - Otherwise, falls back strictly to the direct connection IP (request.client.host).
+    """
+    client_host = request.client.host if request.client and request.client.host else "127.0.0.1"
+    if client_host in settings.TRUSTED_PROXY_IPS:
+        x_forwarded_for = request.headers.get("X-Forwarded-For")
+        if x_forwarded_for:
+            return x_forwarded_for.split(",")[0].strip()
+    return client_host
 
 
 def set_refresh_token_cookie(response: Response, refresh_token: str) -> None:
@@ -50,6 +55,7 @@ async def login(
     """
     Verifies user credentials, enforces IP rate limiting and account lockout,
     issues access token in body and refresh token in httpOnly cookie.
+    Caches direct reports in the returned user payload.
     """
     if not isinstance(rate_limiter, RateLimiter):
         rate_limiter = get_rate_limiter()
@@ -67,11 +73,12 @@ async def login(
     access_token = create_access_token(email=user.email, role=user.role.value)
     refresh_token = create_refresh_token(email=user.email, role=user.role.value)
     set_refresh_token_cookie(response, refresh_token)
+    user_read = await populate_user_effective_cache(user, db)
     return Token(
         access_token=access_token,
         token_type="bearer",
         must_change_password=user.must_change_password,
-        user=user,
+        user=user_read,
     )
 
 
@@ -103,11 +110,12 @@ async def swagger_login(
     access_token = create_access_token(email=user.email, role=user.role.value)
     refresh_token = create_refresh_token(email=user.email, role=user.role.value)
     set_refresh_token_cookie(response, refresh_token)
+    user_read = await populate_user_effective_cache(user, db)
     return Token(
         access_token=access_token,
         token_type="bearer",
         must_change_password=user.must_change_password,
-        user=user,
+        user=user_read,
     )
 
 
@@ -128,10 +136,18 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
 
 
 @router.post("/logout", status_code=status.HTTP_200_OK)
-async def logout(response: Response):
+async def logout(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
     """
-    Clears the httpOnly refresh_token cookie.
+    Revokes the refresh_token in database and clears the httpOnly refresh_token cookie.
     """
+    refresh_token = request.cookies.get("refresh_token")
+    if refresh_token:
+        await auth_service.revoke_token(db=db, token=refresh_token)
+
     response.delete_cookie(key="refresh_token", path="/auth")
     return {"message": "Logged out successfully"}
 

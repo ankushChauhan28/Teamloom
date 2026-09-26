@@ -44,6 +44,20 @@ TestingSessionLocal = async_sessionmaker(
 )
 
 
+from sqlalchemy import event
+
+_seq_counter = [1000]
+
+
+@event.listens_for(engine.sync_engine, "connect")
+def _register_sqlite_functions(dbapi_connection, connection_record):
+    def _nextval(seq_name: str) -> int:
+        _seq_counter[0] += 1
+        return _seq_counter[0]
+
+    dbapi_connection.create_function("nextval", 1, _nextval)
+
+
 @pytest.fixture(autouse=True)
 def mock_send_welcome_email() -> AsyncGenerator[MagicMock, None]:
     """
@@ -83,6 +97,7 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
     Async Database Session Fixture (Scope: Function)
     Creates fresh schema tables before each test and drops them post-test.
     """
+    _seq_counter[0] = 1000
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -100,7 +115,8 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     """
 
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
-        yield db_session
+        async with TestingSessionLocal() as session:
+            yield session
 
     app.dependency_overrides[get_db] = override_get_db
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -118,6 +134,7 @@ async def admin_user(db_session: AsyncSession) -> User:
         email="admin.test@example.com",
         hashed_password=hash_password("adminpassword123"),
         role=UserRole.ADMIN,
+        access_level=1,
         employee_code="EMP-0001",
         must_change_password=False,
     )
@@ -137,6 +154,7 @@ async def employee_user(db_session: AsyncSession) -> User:
         email="employee.test@example.com",
         hashed_password=hash_password("employeepassword123"),
         role=UserRole.EMPLOYEE,
+        access_level=3,
         employee_code="EMP-0002",
         must_change_password=False,
     )

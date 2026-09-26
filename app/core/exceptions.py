@@ -1,8 +1,10 @@
 class AppException(Exception):
     """Base application exception."""
 
-    def __init__(self, message: str):
-        self.message = message
+    def __init__(self, message: str = "", status_code: int = 500, detail: str | None = None):
+        self.message = detail if detail is not None else message
+        self.detail = self.message
+        self.status_code = status_code
         super().__init__(self.message)
 
 
@@ -39,4 +41,5 @@ class AuthorizationException(AppException):
 class BadRequestException(AppException):
     """Raised when a request is invalid or cannot be processed due to business rules."""
 
-    pass
+    def __init__(self, message: str = "", detail: str | None = None):
+        super().__init__(message=message, status_code=400, detail=detail)

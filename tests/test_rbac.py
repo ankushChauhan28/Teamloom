@@ -7,8 +7,10 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 from fastapi import status
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.user import User
+from app.core.security import create_access_token, hash_password
+from app.models.user import User, UserRole
 
 
 @pytest.mark.asyncio
@@ -135,3 +137,156 @@ async def test_employee_cannot_bypass_reports_to_id_via_update_me(
     assert data["full_name"] == "Updated Employee Name"
     # Ensure reports_to_id remained None and was not mutated via self-update
     assert data["reports_to_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_tier3_user_cannot_assign_task_even_with_direct_reports(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """
+    Verify that Tier 3 users cannot assign tasks even if they have direct reports (no bumping).
+    """
+    tier3_lead = User(
+        full_name="Tier 3 Team Lead",
+        email="lead.tier3@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=3,
+        employee_code="EMP-3001",
+        must_change_password=False,
+    )
+    db_session.add(tier3_lead)
+    await db_session.commit()
+    await db_session.refresh(tier3_lead)
+
+    tier4_subordinate = User(
+        full_name="Tier 4 Associate",
+        email="assoc.tier4@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=4,
+        employee_code="EMP-4001",
+        reports_to_id=tier3_lead.id,
+        must_change_password=False,
+    )
+    db_session.add(tier4_subordinate)
+    await db_session.commit()
+    await db_session.refresh(tier4_subordinate)
+
+    lead_token = create_access_token(email=tier3_lead.email, role=tier3_lead.role.value)
+    lead_headers = {"Authorization": f"Bearer {lead_token}"}
+
+    payload = {
+        "title": "Lead Task Assignment Attempt",
+        "description": "Tier 3 attempting to assign task to direct report",
+        "priority": "HIGH",
+        "due_datetime": (datetime.now(UTC) + timedelta(days=3)).isoformat(),
+        "assigned_to": tier4_subordinate.id,
+    }
+    response = await client.post("/tasks/", json=payload, headers=lead_headers)
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert "permission" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_tier4_user_cannot_assign_task_even_with_direct_reports(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """
+    Verify that Tier 4 users cannot assign tasks even if they have direct reports (no bumping).
+    """
+    tier4_user = User(
+        full_name="Tier 4 Worker",
+        email="worker.tier4@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=4,
+        employee_code="EMP-4002",
+        must_change_password=False,
+    )
+    db_session.add(tier4_user)
+    await db_session.commit()
+    await db_session.refresh(tier4_user)
+
+    tier4_report = User(
+        full_name="Tier 4 Report",
+        email="report.tier4@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=4,
+        employee_code="EMP-4003",
+        reports_to_id=tier4_user.id,
+        must_change_password=False,
+    )
+    db_session.add(tier4_report)
+    await db_session.commit()
+    await db_session.refresh(tier4_report)
+
+    token = create_access_token(email=tier4_user.email, role=tier4_user.role.value)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    payload = {
+        "title": "Tier 4 Assignment Attempt",
+        "description": "Tier 4 attempting to assign task",
+        "priority": "LOW",
+        "due_datetime": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+        "assigned_to": tier4_report.id,
+    }
+    response = await client.post("/tasks/", json=payload, headers=headers)
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert "permission" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_tier2_manager_can_assign_task_to_direct_report_normally(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """
+    Verify that Tier 2 managers can normally assign tasks to their direct reports.
+    """
+    tier2_mgr = User(
+        full_name="Tier 2 Manager Standard",
+        email="mgr.tier2.standard@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=2,
+        employee_code="EMP-2005",
+        must_change_password=False,
+    )
+    db_session.add(tier2_mgr)
+    await db_session.commit()
+    await db_session.refresh(tier2_mgr)
+
+    subordinate = User(
+        full_name="Tier 3 Subordinate",
+        email="subordinate.tier3@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=3,
+        employee_code="EMP-3005",
+        reports_to_id=tier2_mgr.id,
+        must_change_password=False,
+    )
+    db_session.add(subordinate)
+    await db_session.commit()
+    await db_session.refresh(subordinate)
+
+    mgr_token = create_access_token(email=tier2_mgr.email, role=tier2_mgr.role.value)
+    mgr_headers = {"Authorization": f"Bearer {mgr_token}"}
+
+    payload = {
+        "title": "Manager Assigned Task",
+        "description": "Valid task from Tier 2 manager to report",
+        "priority": "MEDIUM",
+        "due_datetime": (datetime.now(UTC) + timedelta(days=4)).isoformat(),
+        "assigned_to": subordinate.id,
+    }
+    response = await client.post("/tasks/", json=payload, headers=mgr_headers)
+    assert response.status_code == status.HTTP_201_CREATED
+    data = response.json()
+    assert data["title"] == payload["title"]
+    assert data["assigned_to"] == subordinate.id
+

@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import require_password_change_cleared, require_role
+from app.core.security import require_password_change_cleared
 from app.db.session import get_db
 from app.models.task import TaskPriority, TaskStatus
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.schemas.task import TaskCreate, TaskRead, TaskUpdate
 from app.services import task_service
+from app.services.permission_service import check_access_level_dependency
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
 
@@ -19,7 +20,7 @@ async def create_task(
 ):
     """
     Create a new task and assign it to an employee.
-    Accessible by Admin OR any user who is the direct manager of the target employee.
+    Accessible by Tier 1 OR any user who is the direct manager of the target employee.
     """
     return await task_service.create_task(db=db, task_in=task_in, creator=current_user)
 
@@ -60,7 +61,7 @@ async def list_tasks(
     current_user: User = Depends(require_password_change_cleared),
 ):
     """
-    List tasks. Admin sees all tasks; Employee sees only their assigned tasks.
+    List tasks. Tier 1 sees all tasks; other tiers see only their assigned tasks.
     Supports filtering by status and priority, sorting, and pagination.
     """
     return await task_service.get_tasks(
@@ -81,7 +82,7 @@ async def get_task(
     current_user: User = Depends(require_password_change_cleared),
 ):
     """
-    Retrieve details of a single task. Employees can only view their own tasks.
+    Retrieve details of a single task. Non-tier-1 users can only view their own tasks.
     """
     return await task_service.get_task_by_id(db=db, task_id=id, user=current_user)
 
@@ -94,8 +95,9 @@ async def update_task(
     current_user: User = Depends(require_password_change_cleared),
 ):
     """
-    Update a task. Admin can update any field.
-    Employees can only update the status field of their assigned tasks.
+    Update a task. Tier 1 can update any field.
+    Managers can update full metadata of direct reports' tasks.
+    Associates can only update the status field of their assigned tasks.
     """
     return await task_service.update_task(
         db=db, task_id=id, task_update=task_update, user=current_user
@@ -106,10 +108,10 @@ async def update_task(
 async def delete_task(
     id: int,
     db: AsyncSession = Depends(get_db),
-    current_admin: User = Depends(require_role(UserRole.ADMIN)),
+    current_admin: User = Depends(check_access_level_dependency(1)),
 ):
     """
-    Delete a task. Admin only.
+    Delete a task. Tier 1 only.
     """
     await task_service.delete_task(db=db, task_id=id, user=current_admin)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

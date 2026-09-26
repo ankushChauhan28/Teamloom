@@ -59,6 +59,7 @@ async def seed_admin():
                 email=email,
                 hashed_password=hashed_password,
                 role=UserRole.ADMIN,
+                access_level=1,
                 employee_code=emp_code,
                 must_change_password=False,
             )

@@ -1,6 +1,6 @@
 import enum
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -20,9 +20,16 @@ class User(Base):
     full_name = Column(String, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
+    # DEPRECATED: Retained for backward compatibility. Use access_level instead.
     role = Column(SQLEnum(UserRole), default=UserRole.EMPLOYEE, nullable=False)
+    access_level = Column(
+        Integer,
+        CheckConstraint("access_level >= 1 AND access_level <= 4", name="check_user_access_level"),
+        default=3,
+        nullable=False,
+    )
     reports_to_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    designation = Column(String(100), nullable=True, default=None)
+    designation = Column(String(255), nullable=True, default=None)
     employee_code = Column(String, unique=True, index=True, nullable=True)
     must_change_password = Column(Boolean, default=False, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)

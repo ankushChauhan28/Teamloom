@@ -1,7 +1,9 @@
+import hashlib
 from datetime import UTC, datetime, timedelta
 
 import jwt
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
@@ -15,6 +17,7 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
+from app.models.revoked_token import RevokedToken
 from app.models.user import User
 from app.schemas.user import PasswordChange, UserLogin
 
@@ -93,9 +96,48 @@ async def change_password(db: AsyncSession, user: User, pwd_in: PasswordChange) 
     return user
 
 
+async def revoke_token(db: AsyncSession, token: str) -> None:
+    """
+    Extracts token_jti and expiration timestamp from JWT payload and inserts it into
+    the revoked_tokens table. Handles malformed or already-revoked tokens gracefully and idempotently.
+    """
+    try:
+        payload = decode_refresh_token(token)
+    except jwt.ExpiredSignatureError:
+        try:
+            payload = jwt.decode(token, options={"verify_signature": False})
+        except Exception:
+            return
+    except jwt.InvalidTokenError:
+        try:
+            payload = jwt.decode(token, options={"verify_signature": False})
+        except Exception:
+            return
+
+    jti = payload.get("jti") or hashlib.sha256(token.encode("utf-8")).hexdigest()
+    exp = payload.get("exp")
+
+    if exp:
+        exp_dt = datetime.fromtimestamp(exp, tz=UTC)
+    else:
+        exp_dt = datetime.now(UTC) + timedelta(days=7)
+
+    existing = await db.execute(select(RevokedToken).where(RevokedToken.token_jti == jti))
+    if existing.scalar_one_or_none() is not None:
+        return
+
+    revoked = RevokedToken(token_jti=jti, exp_timestamp=exp_dt)
+    db.add(revoked)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+
+
 async def refresh_access_token(db: AsyncSession, refresh_token: str) -> tuple[str, str]:
     """
     Exchanges a valid refresh token for a new access token and rotates the refresh token.
+    Checks whether the refresh token has been revoked before issuing new tokens.
     Returns tuple of (new_access_token, new_refresh_token).
     """
     try:
@@ -104,6 +146,13 @@ async def refresh_access_token(db: AsyncSession, refresh_token: str) -> tuple[st
         raise AuthenticationException("Refresh token has expired.")
     except jwt.InvalidTokenError:
         raise AuthenticationException("Invalid refresh token.")
+
+    token_jti = payload.get("jti") or hashlib.sha256(refresh_token.encode("utf-8")).hexdigest()
+    revoked_result = await db.execute(
+        select(RevokedToken).where(RevokedToken.token_jti == token_jti)
+    )
+    if revoked_result.scalar_one_or_none() is not None:
+        raise AuthenticationException("Refresh token has been revoked.")
 
     email = payload.get("sub")
     if not email:
@@ -117,3 +166,16 @@ async def refresh_access_token(db: AsyncSession, refresh_token: str) -> tuple[st
     new_access_token = create_access_token(email=user.email, role=user.role.value)
     new_refresh_token = create_refresh_token(email=user.email, role=user.role.value)
     return new_access_token, new_refresh_token
+
+
+async def cleanup_expired_revocations(db: AsyncSession) -> int:
+    """
+    Deletes rows from revoked_tokens where exp_timestamp < current UTC time.
+    Returns count of deleted records.
+    """
+    now = datetime.now(UTC)
+    stmt = delete(RevokedToken).where(RevokedToken.exp_timestamp < now)
+    result = await db.execute(stmt)
+    await db.commit()
+    return result.rowcount
+

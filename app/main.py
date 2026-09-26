@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -12,12 +13,22 @@ from app.core.exceptions import (
     ResourceNotFoundException,
     UserAlreadyExistsException,
 )
+from app.core.scheduler import shutdown_scheduler, start_scheduler
 from app.routes import analytics, auth, leaves, tasks, users
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    start_scheduler()
+    yield
+    shutdown_scheduler()
+
 
 app = FastAPI(
     title="Teamloom API",
     description="A clean, modular FastAPI backend for portfolio and learning demonstration.",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Explicit CORS Configuration
@@ -75,7 +86,9 @@ def bad_request_handler(request: Request, exc: BadRequestException):
 
 @app.exception_handler(AppException)
 def app_exception_handler(request: Request, exc: AppException):
+    status_code = getattr(exc, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
+    detail = getattr(exc, "detail", getattr(exc, "message", "An internal server error occurred."))
     return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "An internal server error occurred."},
+        status_code=status_code,
+        content={"detail": detail},
     )

@@ -68,10 +68,91 @@ class InMemoryRateLimiter(RateLimiter):
         self.requests.clear()
 
 
-# Global singleton instance for single-instance app deployment
-_limiter_instance = InMemoryRateLimiter(max_requests=10, window_seconds=900)
+class RedisRateLimiter(RateLimiter):
+    """
+    Redis-backed sliding-window rate limiter using sorted sets (ZSET).
+    Guarantees shared state across multiple Uvicorn workers and container replicas.
+    """
+
+    def __init__(
+        self,
+        redis_url: str | None = None,
+        max_requests: int = 10,
+        window_seconds: int = 900,
+        redis_client=None,
+    ):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.redis_url = redis_url
+        self._redis_client = redis_client
+
+    async def _get_client(self):
+        if self._redis_client is not None:
+            return self._redis_client
+        import redis.asyncio as aioredis
+        from app.core.config import settings
+
+        self._redis_client = aioredis.from_url(
+            self.redis_url or settings.REDIS_URL,
+            decode_responses=True,
+        )
+        return self._redis_client
+
+    async def check_and_increment(self, key: str) -> RateLimitResult:
+        client = await self._get_client()
+        redis_key = f"rate_limit:{key}"
+        now = time.time()
+        window_start = now - self.window_seconds
+
+        async with client.pipeline(transaction=True) as pipe:
+            pipe.zremrangebyscore(redis_key, 0, window_start)
+            pipe.zcard(redis_key)
+            pipe.zrange(redis_key, 0, 0, withscores=True)
+            res = await pipe.execute()
+
+        count = res[1]
+        oldest = res[2]
+
+        if count >= self.max_requests:
+            retry_after = 1
+            if oldest:
+                oldest_ts = float(oldest[0][1])
+                retry_after = max(1, int(oldest_ts + self.window_seconds - now) + 1)
+            return RateLimitResult(allowed=False, retry_after_seconds=retry_after)
+
+        async with client.pipeline(transaction=True) as pipe:
+            member = f"{now}:{time.time_ns()}"
+            pipe.zadd(redis_key, {member: now})
+            pipe.expire(redis_key, self.window_seconds + 60)
+            await pipe.execute()
+
+        return RateLimitResult(allowed=True, retry_after_seconds=0)
+
+    async def reset(self) -> None:
+        """Clears all rate limit keys in Redis (useful for testing)."""
+        client = await self._get_client()
+        keys = await client.keys("rate_limit:*")
+        if keys:
+            await client.delete(*keys)
+
+
+# Global instances for dependency injection
+_in_memory_instance = InMemoryRateLimiter(max_requests=10, window_seconds=900)
+_limiter_instance = _in_memory_instance
+_redis_limiter_instance: RateLimiter | None = None
 
 
 def get_rate_limiter() -> RateLimiter:
     """FastAPI dependency yielding the configured RateLimiter instance."""
-    return _limiter_instance
+    global _redis_limiter_instance
+    from app.core.config import settings
+
+    if settings.RATE_LIMITER_BACKEND == "redis":
+        if _redis_limiter_instance is None:
+            _redis_limiter_instance = RedisRateLimiter(
+                redis_url=settings.REDIS_URL,
+                max_requests=10,
+                window_seconds=900,
+            )
+        return _redis_limiter_instance
+    return _in_memory_instance

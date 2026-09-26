@@ -217,7 +217,7 @@ async def test_refresh_expired_jwt_returns_401(client: AsyncClient, employee_use
 @pytest.mark.asyncio
 async def test_logout_user_success(client: AsyncClient, employee_user: User) -> None:
     """
-    Test logging out clears the refresh_token cookie.
+    Test logging out clears the refresh_token cookie and revokes the token server-side.
     """
     await client.post(
         "/auth/login",
@@ -228,6 +228,77 @@ async def test_logout_user_success(client: AsyncClient, employee_user: User) -> 
     response = await client.post("/auth/logout")
     assert response.status_code == status.HTTP_200_OK
     assert response.json()["message"] == "Logged out successfully"
+    assert "refresh_token" not in client.cookies
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_token_immediately(client: AsyncClient, employee_user: User) -> None:
+    """
+    Test that after logout, attempting to call /auth/refresh with the revoked token returns HTTP 401.
+    """
+    login_res = await client.post(
+        "/auth/login",
+        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+    )
+    assert login_res.status_code == status.HTTP_200_OK
+    stolen_token = client.cookies.get("refresh_token")
+    assert stolen_token is not None
+
+    # Perform logout
+    logout_res = await client.post("/auth/logout")
+    assert logout_res.status_code == status.HTTP_200_OK
+
+    # Attempt to reuse the token after logout
+    client.cookies.set("refresh_token", stolen_token, path="/auth")
+    refresh_res = await client.post("/auth/refresh")
+    assert refresh_res.status_code == status.HTTP_401_UNAUTHORIZED
+    assert "revoked" in refresh_res.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_stolen_token_after_logout_rejected(
+    client: AsyncClient, employee_user: User
+) -> None:
+    """
+    Test that an attacker using a stolen refresh token after the victim logged out is rejected.
+    """
+    login_res = await client.post(
+        "/auth/login",
+        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+    )
+    assert login_res.status_code == status.HTTP_200_OK
+    stolen_token = client.cookies.get("refresh_token")
+    assert stolen_token is not None
+
+    # User logs out
+    await client.post("/auth/logout")
+
+    # Attacker uses stolen token
+    client.cookies.set("refresh_token", stolen_token, path="/auth")
+    attack_res = await client.post("/auth/refresh")
+    assert attack_res.status_code == status.HTTP_401_UNAUTHORIZED
+    assert "revoked" in attack_res.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_revocation_idempotency_and_cleanup(
+    db_session: AsyncSession, employee_user: User
+) -> None:
+    """
+    Test that calling revoke_token multiple times is idempotent and cleanup_expired_revocations works cleanly.
+    """
+    from app.services.auth_service import cleanup_expired_revocations, revoke_token
+
+    token = create_refresh_token(email=employee_user.email, role=employee_user.role.value)
+
+    # First revocation
+    await revoke_token(db=db_session, token=token)
+    # Second revocation (idempotent duplicate call)
+    await revoke_token(db=db_session, token=token)
+
+    # Cleanup job call
+    cleaned = await cleanup_expired_revocations(db=db_session)
+    assert isinstance(cleaned, int)
 
 
 @pytest.mark.asyncio
@@ -258,3 +329,59 @@ async def test_unit_direct_auth_routes_execution(
     )
     res_refresh = await refresh(request=req, response=response, db=db_session)
     assert res_refresh.access_token is not None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_job_removes_only_expired_tokens(
+    db_session: AsyncSession,
+) -> None:
+    """
+    Test that cleanup_expired_revocations prunes only tokens whose exp_timestamp is in the past,
+    leaving unexpired/active tokens untouched in the revoked_tokens table.
+    Also verifies start_scheduler and shutdown_scheduler execute cleanly.
+    """
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy import select
+    from app.models.revoked_token import RevokedToken
+    from app.services.auth_service import cleanup_expired_revocations
+    from app.core.scheduler import start_scheduler, shutdown_scheduler
+
+    now = datetime.now(timezone.utc)
+    expired_token = RevokedToken(
+        token_jti="test-expired-jti-12345",
+        exp_timestamp=now - timedelta(hours=2),
+    )
+    valid_token = RevokedToken(
+        token_jti="test-valid-jti-67890",
+        exp_timestamp=now + timedelta(days=7),
+    )
+    db_session.add_all([expired_token, valid_token])
+    await db_session.commit()
+
+    # Verify both exist before cleanup
+    res_before = await db_session.execute(
+        select(RevokedToken).where(
+            RevokedToken.token_jti.in_(["test-expired-jti-12345", "test-valid-jti-67890"])
+        )
+    )
+    assert len(res_before.scalars().all()) == 2
+
+    # Execute cleanup
+    deleted_count = await cleanup_expired_revocations(db_session)
+    assert deleted_count >= 1
+
+    # Verify only the valid token remains
+    res_after = await db_session.execute(
+        select(RevokedToken).where(
+            RevokedToken.token_jti.in_(["test-expired-jti-12345", "test-valid-jti-67890"])
+        )
+    )
+    remaining = res_after.scalars().all()
+    assert len(remaining) == 1
+    assert remaining[0].token_jti == "test-valid-jti-67890"
+
+    # Verify scheduler start and clean shutdown lifecycle
+    start_scheduler()
+    shutdown_scheduler()
+
+

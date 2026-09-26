@@ -2,7 +2,7 @@ import enum
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy import Enum as SQLEnum
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from app.db.base import Base
@@ -30,6 +30,8 @@ class Task(Base):
     priority = Column(SQLEnum(TaskPriority), nullable=False)
     due_datetime = Column(DateTime(timezone=True), nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+    version: Mapped[int] = mapped_column(default=1)
+    __mapper_args__ = {"version_id_col": version}
     assigned_to = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_by = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -37,5 +39,8 @@ class Task(Base):
     # Relationships
     assigned_employee = relationship(
         "User", foreign_keys=[assigned_to], back_populates="assigned_tasks"
+    )
+    assigned_to_user = relationship(
+        "User", foreign_keys=[assigned_to], viewonly=True
     )
     creator = relationship("User", foreign_keys=[created_by], back_populates="created_tasks")

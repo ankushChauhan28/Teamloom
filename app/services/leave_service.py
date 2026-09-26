@@ -21,6 +21,20 @@ async def create_leave_request(
     if leave_in.end_date < leave_in.start_date:
         raise BadRequestException("End date cannot be prior to start date.")
 
+    # Overlap validation: query existing PENDING or APPROVED leave requests for employee
+    stmt = select(LeaveRequest).where(
+        LeaveRequest.employee_id == employee_id,
+        LeaveRequest.status.in_([LeaveStatus.PENDING, LeaveStatus.APPROVED]),
+    )
+    result = await db.execute(stmt)
+    existing_leaves = result.scalars().all()
+
+    for existing in existing_leaves:
+        if leave_in.start_date <= existing.end_date and leave_in.end_date >= existing.start_date:
+            raise BadRequestException(
+                detail=f"Leave request dates overlap with existing request (ID: {existing.id}). Please choose different dates."
+            )
+
     db_leave = LeaveRequest(
         employee_id=employee_id,
         reason=leave_in.reason,
@@ -48,7 +62,9 @@ async def get_leaves(
     """
     stmt = select(LeaveRequest)
 
-    if user.role == UserRole.EMPLOYEE:
+    # Scoping: Tier 1 sees all, others see only their own requests
+    is_admin = getattr(user, "access_level", None) == 1 or user.role == UserRole.ADMIN
+    if not is_admin:
         stmt = stmt.where(LeaveRequest.employee_id == user.id)
 
     if status:
@@ -109,7 +125,7 @@ async def review_leave_request(
 ) -> LeaveRequest:
     """
     Approves or rejects a leave request.
-    Accessible by Admin OR the direct manager of the applicant employee.
+    Accessible by Tier 1 Admin only.
     """
     result = await db.execute(select(LeaveRequest).where(LeaveRequest.id == leave_id))
     db_leave = result.scalar_one_or_none()
@@ -130,15 +146,9 @@ async def review_leave_request(
     if db_leave.employee_id == reviewer.id:
         raise AuthorizationException("You cannot approve or reject your own leave request.")
 
-    # Fetch applicant employee to check reports_to_id
-    res_emp = await db.execute(select(User).where(User.id == db_leave.employee_id))
-    applicant = res_emp.scalar_one_or_none()
-
-    is_admin = reviewer.role == UserRole.ADMIN
-    is_direct_manager = applicant is not None and applicant.reports_to_id == reviewer.id
-
-    if not (is_admin or is_direct_manager):
-        raise AuthorizationException("You do not have permission to review this leave request.")
+    is_admin = getattr(reviewer, "access_level", None) == 1 or reviewer.role == UserRole.ADMIN
+    if not is_admin:
+        raise AuthorizationException("Only Tier 1 Administrators can review leave requests.")
 
     # Enforce reviewed_by setting
     db_leave.status = review_in.status

@@ -1,7 +1,8 @@
+import logging
 import secrets
 import string
 
-from sqlalchemy import select
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.email import send_employee_welcome_email
@@ -13,6 +14,8 @@ from app.core.exceptions import (
 from app.core.security import hash_password
 from app.models.user import User, UserRole
 from app.schemas.user import EmployeeCreate, UserUpdate
+
+logger = logging.getLogger(__name__)
 
 
 async def update_user_profile(db: AsyncSession, user: User, user_update: UserUpdate) -> User:
@@ -43,9 +46,18 @@ async def get_employees(db: AsyncSession) -> list[User]:
 
 async def _generate_next_employee_code(db: AsyncSession) -> str:
     """
-    Finds maximum numerical suffix among existing employee_code values (e.g. EMP-1005 -> 1005)
-    and returns EMP-1006. If no codes exist or max <= 1000, starts at EMP-1001.
+    Atomically generates the next sequential employee code (e.g. EMP-1006).
+    Uses database sequence `employee_code_seq`, falling back to max suffix
+    calculation if sequence is unavailable.
     """
+    try:
+        seq_res = await db.execute(text("SELECT nextval('employee_code_seq')"))
+        next_val = seq_res.scalar()
+        if next_val:
+            return f"EMP-{next_val}"
+    except Exception:
+        pass
+
     result = await db.execute(select(User.employee_code).where(User.employee_code.is_not(None)))
     codes = result.scalars().all()
     max_num = 1000
@@ -83,7 +95,7 @@ async def create_employee(db: AsyncSession, employee_in: EmployeeCreate) -> tupl
     Creates a new employee account:
     - Verifies email uniqueness.
     - Validates reports_to_id if provided.
-    - Generates sequential employee_code (EMP-1001, etc).
+    - Generates sequential employee_code (EMP-1001, etc) with retry loop for collision safety.
     - Generates temporary password via secrets module.
     - Hashes password and sets must_change_password = True.
     - Attempts to send welcome email via SMTP.
@@ -100,23 +112,32 @@ async def create_employee(db: AsyncSession, employee_in: EmployeeCreate) -> tupl
         if not proposed_mgr:
             raise ResourceNotFoundException("Reports-to supervisor user not found.")
 
-    emp_code = await _generate_next_employee_code(db)
     temp_password = _generate_temp_password()
     hashed_pwd = hash_password(temp_password)
 
-    new_user = User(
-        full_name=employee_in.full_name,
-        email=employee_in.email,
-        hashed_password=hashed_pwd,
-        role=UserRole.EMPLOYEE,
-        reports_to_id=employee_in.reports_to_id,
-        designation=employee_in.designation,
-        employee_code=emp_code,
-        must_change_password=True,
-    )
-    db.add(new_user)
-    await db.commit()
-    await db.refresh(new_user)
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        emp_code = await _generate_next_employee_code(db)
+        new_user = User(
+            full_name=employee_in.full_name,
+            email=employee_in.email,
+            hashed_password=hashed_pwd,
+            role=UserRole.EMPLOYEE,
+            access_level=employee_in.access_level or 3,
+            reports_to_id=employee_in.reports_to_id,
+            designation=employee_in.designation,
+            employee_code=emp_code,
+            must_change_password=True,
+        )
+        db.add(new_user)
+        try:
+            await db.commit()
+            await db.refresh(new_user)
+            break
+        except Exception:
+            await db.rollback()
+            if attempt == max_attempts - 1:
+                raise
 
     email_sent = send_employee_welcome_email(
         email=new_user.email,
@@ -234,11 +255,20 @@ async def deactivate_user(db: AsyncSession, current_admin_id: int, target_user_i
 
     target_user.is_active = False
 
-    # Clear reports_to_id on any direct reports of this user
-    direct_reports_res = await db.execute(select(User).where(User.reports_to_id == target_user_id))
-    direct_reports = direct_reports_res.scalars().all()
-    for report in direct_reports:
-        report.reports_to_id = None
+    # Check if this user has active direct reports
+    count_stmt = select(func.count()).select_from(User).where(
+        User.reports_to_id == target_user_id,
+        User.is_active.is_(True),
+    )
+    direct_reports_count = (await db.execute(count_stmt)).scalar() or 0
+
+    if direct_reports_count > 0:
+        await db.execute(
+            update(User).where(User.reports_to_id == target_user_id).values(reports_to_id=None)
+        )
+        logger.info(
+            f"Cleared reports_to_id for {direct_reports_count} direct reports of deactivated supervisor (ID: {target_user_id})"
+        )
 
     await db.commit()
     await db.refresh(target_user)

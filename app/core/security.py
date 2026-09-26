@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
@@ -42,7 +43,14 @@ def create_jwt_token(
     """
     now = datetime.now(UTC)
     expire = now + expires_delta
-    to_encode = {"sub": subject, "role": role, "type": token_type, "iat": now, "exp": expire}
+    to_encode = {
+        "sub": subject,
+        "role": role,
+        "type": token_type,
+        "jti": str(uuid.uuid4()),
+        "iat": now,
+        "exp": expire,
+    }
     return jwt.encode(to_encode, secret_key, algorithm="HS256")
 
 
@@ -133,12 +141,16 @@ async def get_current_user(
 def require_role(required_role: UserRole):
     """
     Dependency factory to enforce role-based access control.
+    Supports both legacy UserRole and new access_level (access_level == 1 satisfies ADMIN).
     """
 
     async def dependency(
         current_user: User = Depends(require_password_change_cleared),
     ) -> User:
-        if current_user.role != required_role:
+        is_admin_tier = hasattr(current_user, "access_level") and current_user.access_level == 1
+        if current_user.role != required_role and not (
+            required_role == UserRole.ADMIN and is_admin_tier
+        ):
             raise AuthorizationException(f"Action requires {required_role.value} role.")
         return current_user
 

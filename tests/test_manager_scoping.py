@@ -22,6 +22,7 @@ async def manager_hierarchy(db_session: AsyncSession):
         email="aisha.mgr@example.com",
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
+        access_level=2,
         employee_code="EMP-1010",
         must_change_password=False,
     )
@@ -190,15 +191,14 @@ async def test_get_team_tasks(client: AsyncClient, manager_hierarchy: dict):
     assert res_other.json() == []
 
 
-async def test_manager_approve_direct_report_leave_success(
+async def test_manager_cannot_approve_direct_report_leave_fails(
     client: AsyncClient, manager_hierarchy: dict, db_session: AsyncSession
 ):
     """
-    A non-admin manager can approve a direct report's leave request and reviewed_by is recorded.
+    A non-admin manager CANNOT approve a direct report's leave request. Only Tier 1 Admin can review leaves (403 Forbidden).
     """
     mgr_headers = manager_hierarchy["mgr_headers"]
     report1 = manager_hierarchy["report1"]
-    manager = manager_hierarchy["manager"]
 
     # Report1 creates leave request
     leave = LeaveRequest(
@@ -212,16 +212,14 @@ async def test_manager_approve_direct_report_leave_success(
     await db_session.commit()
     await db_session.refresh(leave)
 
-    # Manager approves leave
+    # Manager attempts to approve leave -> 403 Forbidden
     res = await client.patch(
         f"/leaves/{leave.id}",
         json={"status": "APPROVED"},
         headers=mgr_headers,
     )
-    assert res.status_code == 200
-    data = res.json()
-    assert data["status"] == "APPROVED"
-    assert data["reviewed_by"] == manager.id
+    assert res.status_code == 403
+    assert "Tier 1" in res.json()["detail"]
 
 
 async def test_manager_cannot_approve_non_report_leave_fails(
@@ -252,7 +250,7 @@ async def test_manager_cannot_approve_non_report_leave_fails(
         headers=mgr_headers,
     )
     assert res.status_code == 403
-    assert res.json()["detail"] == "You do not have permission to review this leave request."
+    assert "Tier 1" in res.json()["detail"]
 
 
 async def test_user_cannot_approve_own_leave_fails(
@@ -283,7 +281,7 @@ async def test_user_cannot_approve_own_leave_fails(
         headers=mgr_headers,
     )
     assert res.status_code == 403
-    assert res.json()["detail"] == "You cannot approve or reject your own leave request."
+    assert "Tier 1" in res.json()["detail"]
 
 
 async def test_get_team_leave_requests(
@@ -365,7 +363,7 @@ async def test_edge_case_plain_employee_leave_review_fails(
         headers=other_headers,
     )
     assert res.status_code == 403
-    assert "permission" in res.json()["detail"].lower()
+    assert "tier 1" in res.json()["detail"].lower() or "permission" in res.json()["detail"].lower()
 
 
 async def test_edge_case_manager_assign_to_nonexistent_user_id_fails(

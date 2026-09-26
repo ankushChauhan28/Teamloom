@@ -39,6 +39,15 @@ scratch/
 
 # Private documentation
 docs/INTERVIEW_PREP.md
+docs/PROJECT_MASTERY.md
+PROJECT_DEEP_DIVE.md
+PROJECT_STRUCTURE.md
+completed_UI.md
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
 
 
 

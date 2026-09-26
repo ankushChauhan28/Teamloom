@@ -7,6 +7,7 @@ from app.models.leave import LeaveStatus
 from app.models.user import User
 from app.schemas.leave import LeaveCreate, LeaveRead, LeaveUpdateStatus
 from app.services import leave_service
+from app.services.permission_service import check_access_level_dependency
 
 router = APIRouter(prefix="/leaves", tags=["Leaves"])
 
@@ -76,13 +77,13 @@ async def review_leave(
     id: int,
     review_in: LeaveUpdateStatus,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_password_change_cleared),
+    current_admin: User = Depends(check_access_level_dependency(1)),
 ):
     """
     Approve or reject a leave request.
-    Accessible by Admin OR the direct manager of the applicant employee.
+    Accessible by Tier 1 Admin only.
     Sets the status and updates the reviewer ID to the current user's ID.
     """
     return await leave_service.review_leave_request(
-        db=db, leave_id=id, review_in=review_in, reviewer=current_user
+        db=db, leave_id=id, review_in=review_in, reviewer=current_admin
     )

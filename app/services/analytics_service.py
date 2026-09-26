@@ -86,7 +86,9 @@ async def get_performance_analytics(
     target_employee_id: int | None = None
     filter_stmt = None
 
-    if user.role == UserRole.EMPLOYEE:
+    is_admin = getattr(user, "access_level", None) == 1 or user.role == UserRole.ADMIN
+
+    if not is_admin:
         if not has_reports:
             if employee_id is not None and employee_id != user.id:
                 raise AuthorizationException(
@@ -110,7 +112,7 @@ async def get_performance_analytics(
                 raise AuthorizationException(
                     "You do not have permission to view performance analytics for this employee."
                 )
-    elif user.role == UserRole.ADMIN:
+    else:
         if employee_id is None:
             resolved_scope = "org"
             filter_stmt = None

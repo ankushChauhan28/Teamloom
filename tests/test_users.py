@@ -256,3 +256,93 @@ async def test_deactivate_manager_clears_direct_reports_supervisor(
     assert sub_emp_obj is not None
     assert sub_emp_obj["reports_to_id"] is None, "Deactivating a manager must set direct reports' reports_to_id to None"
 
+
+@pytest.mark.asyncio
+async def test_deactivate_supervisor_clears_direct_reports(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+) -> None:
+    """
+    Test that deactivating a supervisor who has 2 active direct reports
+    clears reports_to_id to NULL for both reports.
+    """
+    # 1. Create a supervisor
+    sup_res = await client.post(
+        "/users/employees",
+        json={
+            "full_name": "Team Supervisor",
+            "email": "supervisor.team@example.com",
+            "designation": "Engineering Manager",
+        },
+        headers=admin_headers,
+    )
+    assert sup_res.status_code == status.HTTP_201_CREATED
+    sup_id = sup_res.json()["id"]
+
+    # 2. Create two active direct reports
+    rep1_res = await client.post(
+        "/users/employees",
+        json={
+            "full_name": "Report One",
+            "email": "report.one@example.com",
+            "reports_to_id": sup_id,
+            "designation": "Software Engineer",
+        },
+        headers=admin_headers,
+    )
+    assert rep1_res.status_code == status.HTTP_201_CREATED
+    rep1_id = rep1_res.json()["id"]
+
+    rep2_res = await client.post(
+        "/users/employees",
+        json={
+            "full_name": "Report Two",
+            "email": "report.two@example.com",
+            "reports_to_id": sup_id,
+            "designation": "QA Engineer",
+        },
+        headers=admin_headers,
+    )
+    assert rep2_res.status_code == status.HTTP_201_CREATED
+    rep2_id = rep2_res.json()["id"]
+
+    # 3. Deactivate the supervisor
+    deact_res = await client.patch(f"/users/{sup_id}/deactivate", headers=admin_headers)
+    assert deact_res.status_code == status.HTTP_200_OK
+    assert deact_res.json()["is_active"] is False
+
+    # 4. Verify both reports now have reports_to_id = NULL
+    users_res = await client.get("/users/", headers=admin_headers)
+    assert users_res.status_code == status.HTTP_200_OK
+    users_by_id = {u["id"]: u for u in users_res.json()}
+
+    assert users_by_id[rep1_id]["reports_to_id"] is None
+    assert users_by_id[rep2_id]["reports_to_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_deactivate_already_orphaned_reports_safe(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+) -> None:
+    """
+    Test deactivating a supervisor with no active direct reports executes cleanly without error (idempotent).
+    """
+    sup_res = await client.post(
+        "/users/employees",
+        json={
+            "full_name": "Solo Supervisor",
+            "email": "solo.supervisor@example.com",
+            "designation": "Team Lead",
+        },
+        headers=admin_headers,
+    )
+    assert sup_res.status_code == status.HTTP_201_CREATED
+    sup_id = sup_res.json()["id"]
+
+    # Deactivate supervisor with 0 direct reports
+    deact_res = await client.patch(f"/users/{sup_id}/deactivate", headers=admin_headers)
+    assert deact_res.status_code == status.HTTP_200_OK
+    assert deact_res.json()["is_active"] is False
+
+

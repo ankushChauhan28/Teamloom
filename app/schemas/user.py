@@ -24,6 +24,7 @@ class EmployeeCreate(BaseModel):
     email: EmailStr
     reports_to_id: int | None = None
     designation: str | None = None
+    access_level: int | None = 3
 
 
 class EmployeeCreateResponse(BaseModel):
@@ -34,6 +35,7 @@ class EmployeeCreateResponse(BaseModel):
     email: EmailStr
     employee_code: str
     role: UserRole
+    access_level: int = 3
     reports_to_id: int | None = None
     designation: str | None = None
     must_change_password: bool
@@ -66,6 +68,7 @@ class TokenRefresh(BaseModel):
 class TokenData(BaseModel):
     email: str | None = None
     role: UserRole | None = None
+    access_level: int | None = None
 
 
 class UserRead(UserBase):
@@ -73,6 +76,9 @@ class UserRead(UserBase):
 
     id: int
     role: UserRole
+    access_level: int = 3
+    effective_tier: int = 3
+    direct_reports_ids: list[int] = []
     reports_to_id: int | None = None
     designation: str | None = None
     employee_code: str | None = None
