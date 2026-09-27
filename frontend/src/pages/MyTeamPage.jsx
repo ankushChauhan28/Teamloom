@@ -60,7 +60,7 @@ function calculateDurationDays(startStr, endStr) {
 
 export function MyTeamPage() {
   const { directReports: authStoreReports, fetchDirectReports, user } = useAuthStore();
-  const [reports, setReports] = useState(authStoreReports || []);
+  const [reports, setReports] = useState((authStoreReports || []).filter((r) => r.is_active !== false));
   const [teamTasks, setTeamTasks] = useState([]);
   const [teamLeaves, setTeamLeaves] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -75,7 +75,7 @@ export function MyTeamPage() {
   const [taskReportFilter, setTaskReportFilter] = useState('ALL');
 
   // Leave Filter State
-  const [leaveStatusFilter, setLeaveStatusFilter] = useState('PENDING');
+  const [leaveStatusFilter, setLeaveStatusFilter] = useState('ALL');
 
   // Performance Tab States
   const [selectedEmployee, setSelectedEmployee] = useState(null);
@@ -100,7 +100,7 @@ export function MyTeamPage() {
         api.get('/tasks/team'),
         api.get('/leaves/team'),
       ]);
-      setReports(reportsData || []);
+      setReports((reportsData || []).filter((r) => r.is_active !== false));
       setTeamTasks(tasksRes.data || []);
       setTeamLeaves(leavesRes.data || []);
     } catch (err) {
@@ -541,8 +541,8 @@ export function MyTeamPage() {
                   onChange={(e) => setLeaveStatusFilter(e.target.value)}
                   className="py-1 px-2.5 text-xs h-8 min-w-[150px]"
                   options={[
-                    { value: 'PENDING', label: 'Pending Review' },
                     { value: 'ALL', label: 'All Statuses' },
+                    { value: 'PENDING', label: 'Pending Review' },
                     { value: 'APPROVED', label: 'Approved' },
                     { value: 'REJECTED', label: 'Rejected' },
                   ]}

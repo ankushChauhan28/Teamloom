@@ -51,7 +51,7 @@ async def list_leaves(
 
 @router.get("/team", response_model=list[LeaveRead])
 async def list_team_leaves(
-    status: LeaveStatus | None = LeaveStatus.PENDING,
+    status: LeaveStatus | None = None,
     sort_by: str | None = None,
     skip: int = 0,
     limit: int = 10,
@@ -60,7 +60,7 @@ async def list_team_leaves(
 ):
     """
     List leave requests submitted by any of the current user's direct reports.
-    Defaults to PENDING status. Returns an empty list if the user has no direct reports.
+    Returns all statuses if status is None. Returns an empty list if the user has no direct reports.
     """
     return await leave_service.get_team_leave_requests(
         db=db,

@@ -89,16 +89,16 @@ async def get_leaves(
 async def get_team_leave_requests(
     db: AsyncSession,
     user: User,
-    status: LeaveStatus | None = LeaveStatus.PENDING,
+    status: LeaveStatus | None = None,
     sort_by: str | None = None,
     skip: int = 0,
     limit: int = 10,
 ) -> list[LeaveRequest]:
     """
     Lists leave requests submitted by any of the current user's direct reports.
-    Defaults to PENDING status first. Returns an empty list if the user has no direct reports.
+    Returns all statuses if status is None. Returns an empty list if the user has no direct reports.
     """
-    reports_stmt = select(User.id).where(User.reports_to_id == user.id)
+    reports_stmt = select(User.id).where(User.reports_to_id == user.id, User.is_active.is_(True))
     reports_res = await db.execute(reports_stmt)
     report_ids = reports_res.scalars().all()
 

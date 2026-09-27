@@ -9,7 +9,9 @@ from fastapi import status
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.user import User
+from app.core.security import create_access_token, hash_password
+from app.models.leave import LeaveRequest, LeaveStatus
+from app.models.user import User, UserRole
 
 
 @pytest.mark.asyncio
@@ -273,5 +275,231 @@ async def test_tier2_manager_cannot_approve_leave(
     )
     assert rev_res.status_code == status.HTTP_403_FORBIDDEN
     assert "Tier 1" in rev_res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_team_leaves_no_status_param_returns_all_statuses(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """
+    Regression test (a):
+    A manager's direct report has one PENDING, one APPROVED, and one REJECTED leave.
+    GET /leaves/team with no status param returns all three requests.
+    """
+    manager = User(
+        full_name="Manager Team Lead",
+        email="team.lead@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=2,
+        employee_code="EMP-2001",
+        must_change_password=False,
+    )
+    db_session.add(manager)
+    await db_session.commit()
+    await db_session.refresh(manager)
+
+    report = User(
+        full_name="Report Dave",
+        email="dave.report@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=3,
+        employee_code="EMP-2002",
+        reports_to_id=manager.id,
+        must_change_password=False,
+    )
+    db_session.add(report)
+    await db_session.commit()
+    await db_session.refresh(report)
+
+    l1 = LeaveRequest(
+        employee_id=report.id,
+        reason="Pending Vacation",
+        start_date=date(2027, 3, 1),
+        end_date=date(2027, 3, 3),
+        status=LeaveStatus.PENDING,
+    )
+    l2 = LeaveRequest(
+        employee_id=report.id,
+        reason="Approved Vacation",
+        start_date=date(2027, 4, 1),
+        end_date=date(2027, 4, 3),
+        status=LeaveStatus.APPROVED,
+    )
+    l3 = LeaveRequest(
+        employee_id=report.id,
+        reason="Rejected Vacation",
+        start_date=date(2027, 5, 1),
+        end_date=date(2027, 5, 3),
+        status=LeaveStatus.REJECTED,
+    )
+    db_session.add_all([l1, l2, l3])
+    await db_session.commit()
+
+    mgr_token = create_access_token(email=manager.email, role=manager.role.value)
+    headers = {"Authorization": f"Bearer {mgr_token}"}
+
+    # Call with no status param
+    res = await client.get("/leaves/team", headers=headers)
+    assert res.status_code == status.HTTP_200_OK
+    leaves = res.json()
+    assert len(leaves) == 3
+    statuses = {l["status"] for l in leaves}
+    assert statuses == {"PENDING", "APPROVED", "REJECTED"}
+
+
+@pytest.mark.asyncio
+async def test_team_leaves_status_filtering_approved_and_pending(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """
+    Regression test (b & c):
+    GET /leaves/team?status=APPROVED returns only the approved leave.
+    GET /leaves/team?status=PENDING returns only the pending leave.
+    """
+    manager = User(
+        full_name="Manager Filter Lead",
+        email="filter.lead@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=2,
+        employee_code="EMP-2003",
+        must_change_password=False,
+    )
+    db_session.add(manager)
+    await db_session.commit()
+    await db_session.refresh(manager)
+
+    report = User(
+        full_name="Report Eve",
+        email="eve.report@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=3,
+        employee_code="EMP-2004",
+        reports_to_id=manager.id,
+        must_change_password=False,
+    )
+    db_session.add(report)
+    await db_session.commit()
+    await db_session.refresh(report)
+
+    l_pending = LeaveRequest(
+        employee_id=report.id,
+        reason="Pending Leave",
+        start_date=date(2027, 6, 1),
+        end_date=date(2027, 6, 2),
+        status=LeaveStatus.PENDING,
+    )
+    l_approved = LeaveRequest(
+        employee_id=report.id,
+        reason="Approved Leave",
+        start_date=date(2027, 7, 1),
+        end_date=date(2027, 7, 2),
+        status=LeaveStatus.APPROVED,
+    )
+    l_rejected = LeaveRequest(
+        employee_id=report.id,
+        reason="Rejected Leave",
+        start_date=date(2027, 8, 1),
+        end_date=date(2027, 8, 2),
+        status=LeaveStatus.REJECTED,
+    )
+    db_session.add_all([l_pending, l_approved, l_rejected])
+    await db_session.commit()
+
+    mgr_token = create_access_token(email=manager.email, role=manager.role.value)
+    headers = {"Authorization": f"Bearer {mgr_token}"}
+
+    # Test APPROVED filter
+    res_app = await client.get("/leaves/team?status=APPROVED", headers=headers)
+    assert res_app.status_code == status.HTTP_200_OK
+    leaves_app = res_app.json()
+    assert len(leaves_app) == 1
+    assert leaves_app[0]["status"] == "APPROVED"
+    assert leaves_app[0]["reason"] == "Approved Leave"
+
+    # Test PENDING filter
+    res_pen = await client.get("/leaves/team?status=PENDING", headers=headers)
+    assert res_pen.status_code == status.HTTP_200_OK
+    leaves_pen = res_pen.json()
+    assert len(leaves_pen) == 1
+    assert leaves_pen[0]["status"] == "PENDING"
+    assert leaves_pen[0]["reason"] == "Pending Leave"
+
+
+@pytest.mark.asyncio
+async def test_team_leaves_deactivated_employee_excluded(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    admin_headers: dict[str, str],
+) -> None:
+    """
+    Regression test (d):
+    A deactivated direct report's leave requests do NOT appear in /leaves/team
+    regardless of status filter.
+    """
+    manager = User(
+        full_name="Manager Deact Test",
+        email="mgr.deact@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=2,
+        employee_code="EMP-2005",
+        must_change_password=False,
+    )
+    db_session.add(manager)
+    await db_session.commit()
+    await db_session.refresh(manager)
+
+    report = User(
+        full_name="Report Frank",
+        email="frank.report@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=3,
+        employee_code="EMP-2006",
+        reports_to_id=manager.id,
+        is_active=True,
+        must_change_password=False,
+    )
+    db_session.add(report)
+    await db_session.commit()
+    await db_session.refresh(report)
+
+    leave = LeaveRequest(
+        employee_id=report.id,
+        reason="Frank Vacation",
+        start_date=date(2027, 9, 1),
+        end_date=date(2027, 9, 3),
+        status=LeaveStatus.PENDING,
+    )
+    db_session.add(leave)
+    await db_session.commit()
+
+    mgr_token = create_access_token(email=manager.email, role=manager.role.value)
+    mgr_headers = {"Authorization": f"Bearer {mgr_token}"}
+
+    # 1. While active, manager sees Frank's leave
+    res_active = await client.get("/leaves/team", headers=mgr_headers)
+    assert res_active.status_code == status.HTTP_200_OK
+    assert len(res_active.json()) == 1
+
+    # 2. Deactivate Frank
+    deact_res = await client.patch(f"/users/{report.id}/deactivate", headers=admin_headers)
+    assert deact_res.status_code == status.HTTP_200_OK
+
+    # 3. Deactivated employee's leave requests do NOT appear (with or without status filter)
+    res_no_param = await client.get("/leaves/team", headers=mgr_headers)
+    assert res_no_param.status_code == status.HTTP_200_OK
+    assert res_no_param.json() == []
+
+    res_pending = await client.get("/leaves/team?status=PENDING", headers=mgr_headers)
+    assert res_pending.status_code == status.HTTP_200_OK
+    assert res_pending.json() == []
+
 
 
