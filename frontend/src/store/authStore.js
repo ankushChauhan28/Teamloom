@@ -28,7 +28,7 @@ export const useAuthStore = create((set, get) => ({
   fetchDirectReports: async () => {
     try {
       const res = await api.get('/users/me/reports');
-      const reports = res.data || [];
+      const reports = (res.data || []).filter((r) => r.is_active !== false);
       set({ directReports: reports });
       return reports;
     } catch {

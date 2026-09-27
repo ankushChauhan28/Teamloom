@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import AuthorizationException
 from app.core.security import require_password_change_cleared
 from app.db.session import get_db
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.schemas.user import (
     EmployeeCreate,
     EmployeeCreateResponse,
@@ -41,6 +42,22 @@ async def get_my_direct_reports(
     Returns an empty list if the user has no direct reports.
     """
     return await user_service.get_user_direct_reports(db=db, user_id=current_user.id)
+
+
+@router.get("/{user_id}/direct-reports", response_model=list[UserRead])
+async def get_direct_reports_by_user_id(
+    user_id: int,
+    current_user: User = Depends(require_password_change_cleared),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Retrieves direct reports for a specific manager ID.
+    Accessible by Tier 1 / Admins or the manager themselves.
+    """
+    is_admin = getattr(current_user, "access_level", None) == 1 or current_user.role == UserRole.ADMIN
+    if not is_admin and current_user.id != user_id:
+        raise AuthorizationException("You are not authorized to view this user's direct reports.")
+    return await user_service.get_user_direct_reports(db=db, user_id=user_id)
 
 
 @router.patch("/me", response_model=UserRead)

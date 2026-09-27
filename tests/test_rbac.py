@@ -140,12 +140,13 @@ async def test_employee_cannot_bypass_reports_to_id_via_update_me(
 
 
 @pytest.mark.asyncio
-async def test_tier3_user_cannot_assign_task_even_with_direct_reports(
+async def test_tier3_user_can_assign_task_to_direct_report(
     client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
     """
-    Verify that Tier 3 users cannot assign tasks even if they have direct reports (no bumping).
+    Verify that Tier 3 users CAN assign tasks to their direct reports,
+    and CANNOT assign to non-direct reports or themselves.
     """
     tier3_lead = User(
         full_name="Tier 3 Team Lead",
@@ -170,32 +171,69 @@ async def test_tier3_user_cannot_assign_task_even_with_direct_reports(
         reports_to_id=tier3_lead.id,
         must_change_password=False,
     )
+    non_report = User(
+        full_name="Other Associate",
+        email="other.tier4@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=4,
+        employee_code="EMP-4009",
+        reports_to_id=None,
+        must_change_password=False,
+    )
     db_session.add(tier4_subordinate)
+    db_session.add(non_report)
     await db_session.commit()
     await db_session.refresh(tier4_subordinate)
+    await db_session.refresh(non_report)
 
     lead_token = create_access_token(email=tier3_lead.email, role=tier3_lead.role.value)
     lead_headers = {"Authorization": f"Bearer {lead_token}"}
 
+    # 1. Successful assignment to direct report
     payload = {
-        "title": "Lead Task Assignment Attempt",
-        "description": "Tier 3 attempting to assign task to direct report",
+        "title": "Lead Task Assignment to Direct Report",
+        "description": "Tier 3 assigning task to direct report",
         "priority": "HIGH",
         "due_datetime": (datetime.now(UTC) + timedelta(days=3)).isoformat(),
         "assigned_to": tier4_subordinate.id,
     }
     response = await client.post("/tasks/", json=payload, headers=lead_headers)
-    assert response.status_code == status.HTTP_403_FORBIDDEN
-    assert "permission" in response.json()["detail"].lower()
+    assert response.status_code == status.HTTP_201_CREATED
+    assert response.json()["assigned_to"] == tier4_subordinate.id
+
+    # 2. Denied assignment to non-direct report
+    unauthorized_payload = {
+        "title": "Lead Task to Non-Report",
+        "description": "Tier 3 attempting to assign task to non-direct report",
+        "priority": "LOW",
+        "due_datetime": (datetime.now(UTC) + timedelta(days=3)).isoformat(),
+        "assigned_to": non_report.id,
+    }
+    unauthorized_res = await client.post("/tasks/", json=unauthorized_payload, headers=lead_headers)
+    assert unauthorized_res.status_code == status.HTTP_403_FORBIDDEN
+    assert "permission" in unauthorized_res.json()["detail"].lower()
+
+    # 3. Denied self-assignment
+    self_payload = {
+        "title": "Self Assignment Attempt",
+        "description": "Tier 3 attempting to assign task to self",
+        "priority": "LOW",
+        "due_datetime": (datetime.now(UTC) + timedelta(days=3)).isoformat(),
+        "assigned_to": tier3_lead.id,
+    }
+    self_res = await client.post("/tasks/", json=self_payload, headers=lead_headers)
+    assert self_res.status_code == status.HTTP_403_FORBIDDEN
 
 
 @pytest.mark.asyncio
-async def test_tier4_user_cannot_assign_task_even_with_direct_reports(
+async def test_tier4_user_can_assign_task_to_direct_report(
     client: AsyncClient,
     db_session: AsyncSession,
 ) -> None:
     """
-    Verify that Tier 4 users cannot assign tasks even if they have direct reports (no bumping).
+    Verify that Tier 4 users CAN assign tasks to their direct reports,
+    and CANNOT assign to non-direct reports.
     """
     tier4_user = User(
         full_name="Tier 4 Worker",
@@ -220,23 +258,52 @@ async def test_tier4_user_cannot_assign_task_even_with_direct_reports(
         reports_to_id=tier4_user.id,
         must_change_password=False,
     )
+    tier4_non_report = User(
+        full_name="Tier 4 Peer",
+        email="peer.tier4@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=4,
+        employee_code="EMP-4004",
+        reports_to_id=None,
+        must_change_password=False,
+    )
     db_session.add(tier4_report)
+    db_session.add(tier4_non_report)
     await db_session.commit()
     await db_session.refresh(tier4_report)
+    await db_session.refresh(tier4_non_report)
 
     token = create_access_token(email=tier4_user.email, role=tier4_user.role.value)
     headers = {"Authorization": f"Bearer {token}"}
 
+    # 1. Successful assignment to direct report
     payload = {
-        "title": "Tier 4 Assignment Attempt",
-        "description": "Tier 4 attempting to assign task",
+        "title": "Tier 4 Assignment to Direct Report",
+        "description": "Tier 4 assigning task to direct report",
         "priority": "LOW",
         "due_datetime": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
         "assigned_to": tier4_report.id,
     }
     response = await client.post("/tasks/", json=payload, headers=headers)
-    assert response.status_code == status.HTTP_403_FORBIDDEN
-    assert "permission" in response.json()["detail"].lower()
+    assert response.status_code == status.HTTP_201_CREATED
+    assert response.json()["assigned_to"] == tier4_report.id
+
+    # 2. Denied assignment to non-direct report
+    unauthorized_res = await client.post(
+        "/tasks/",
+        json={
+            "title": "Tier 4 Assignment to Non-Report",
+            "description": "Tier 4 attempting to assign task to peer",
+            "priority": "LOW",
+            "due_datetime": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+            "assigned_to": tier4_non_report.id,
+        },
+        headers=headers,
+    )
+    assert unauthorized_res.status_code == status.HTTP_403_FORBIDDEN
+    assert "permission" in unauthorized_res.json()["detail"].lower()
+
 
 
 @pytest.mark.asyncio
@@ -289,4 +356,128 @@ async def test_tier2_manager_can_assign_task_to_direct_report_normally(
     data = response.json()
     assert data["title"] == payload["title"]
     assert data["assigned_to"] == subordinate.id
+
+
+@pytest.mark.asyncio
+async def test_ankush_piyush_mortal_hierarchy_chain_task_assignment(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """
+    Regression test for the real-world chain:
+    Ankush (Tier 2, no manager) -> Piyush (Tier 3 direct report) -> Mortal Gama (Tier 4 direct report).
+    - Ankush assigning to Piyush must succeed.
+    - Piyush assigning to Mortal Gama must succeed.
+    - Piyush assigning to Ankush must be forbidden.
+    - Mortal Gama assigning to Piyush must be forbidden.
+    """
+    ankush = User(
+        full_name="Ankush Chauhan",
+        email="ankush@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=2,
+        employee_code="EMP-1002",
+        reports_to_id=None,
+        must_change_password=False,
+    )
+    db_session.add(ankush)
+    await db_session.commit()
+    await db_session.refresh(ankush)
+
+    piyush = User(
+        full_name="Piyush Chauhan",
+        email="piyush@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=3,
+        employee_code="EMP-1005",
+        reports_to_id=ankush.id,
+        must_change_password=False,
+    )
+    db_session.add(piyush)
+    await db_session.commit()
+    await db_session.refresh(piyush)
+
+    mortal = User(
+        full_name="Mortal Gama",
+        email="mortal@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=4,
+        employee_code="EMP-1006",
+        reports_to_id=piyush.id,
+        must_change_password=False,
+    )
+    db_session.add(mortal)
+    await db_session.commit()
+    await db_session.refresh(mortal)
+
+    ankush_token = create_access_token(email=ankush.email, role=ankush.role.value)
+    ankush_headers = {"Authorization": f"Bearer {ankush_token}"}
+
+    piyush_token = create_access_token(email=piyush.email, role=piyush.role.value)
+    piyush_headers = {"Authorization": f"Bearer {piyush_token}"}
+
+    mortal_token = create_access_token(email=mortal.email, role=mortal.role.value)
+    mortal_headers = {"Authorization": f"Bearer {mortal_token}"}
+
+    # 1. Ankush (Tier 2) assigns task to Piyush (Tier 3 direct report) -> MUST SUCCEED
+    res1 = await client.post(
+        "/tasks/",
+        json={
+            "title": "Ankush to Piyush Task",
+            "description": "Task from manager to direct report",
+            "priority": "HIGH",
+            "due_datetime": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+            "assigned_to": piyush.id,
+        },
+        headers=ankush_headers,
+    )
+    assert res1.status_code == status.HTTP_201_CREATED
+    assert res1.json()["assigned_to"] == piyush.id
+
+    # 2. Piyush (Tier 3) assigns task to Mortal Gama (Tier 4 direct report) -> MUST SUCCEED
+    res2 = await client.post(
+        "/tasks/",
+        json={
+            "title": "Piyush to Mortal Task",
+            "description": "Task from lead to direct report",
+            "priority": "MEDIUM",
+            "due_datetime": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+            "assigned_to": mortal.id,
+        },
+        headers=piyush_headers,
+    )
+    assert res2.status_code == status.HTTP_201_CREATED
+    assert res2.json()["assigned_to"] == mortal.id
+
+    # 3. Piyush (Tier 3) cannot assign to Ankush (Tier 2 manager - not a direct report)
+    res3 = await client.post(
+        "/tasks/",
+        json={
+            "title": "Piyush to Ankush Task",
+            "description": "Reverse assignment",
+            "priority": "LOW",
+            "due_datetime": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+            "assigned_to": ankush.id,
+        },
+        headers=piyush_headers,
+    )
+    assert res3.status_code == status.HTTP_403_FORBIDDEN
+
+    # 4. Mortal (Tier 4) cannot assign to Piyush (Tier 3 lead - not a direct report)
+    res4 = await client.post(
+        "/tasks/",
+        json={
+            "title": "Mortal to Piyush Task",
+            "description": "Reverse assignment",
+            "priority": "LOW",
+            "due_datetime": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+            "assigned_to": mortal.id,
+        },
+        headers=mortal_headers,
+    )
+    assert res4.status_code == status.HTTP_403_FORBIDDEN
+
 

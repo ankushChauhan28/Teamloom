@@ -20,6 +20,7 @@ export function ChangePasswordPage() {
 
   const [errors, setErrors] = useState({});
   const [serverError, setServerError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const validate = () => {
@@ -55,20 +56,26 @@ export function ChangePasswordPage() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setServerError('');
+    setSuccessMessage('');
 
     if (!validate()) return;
 
     setIsSubmitting(true);
     try {
       const updatedUser = await changePassword(currentPassword, newPassword);
+      setSuccessMessage('Password changed successfully.');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
       const targetPath = updatedUser?.role === 'ADMIN' ? '/admin/tasks' : '/dashboard';
-      navigate(targetPath, { replace: true });
+      setTimeout(() => {
+        navigate(targetPath, { replace: true });
+      }, 1200);
     } catch (err) {
       const msg =
         err.response?.data?.detail ||
         'Failed to update password. Please check your current password.';
       setServerError(msg);
-    } finally {
       setIsSubmitting(false);
     }
   };
@@ -121,6 +128,12 @@ export function ChangePasswordPage() {
         {serverError && (
           <Alert variant="danger" className="mb-4">
             {serverError}
+          </Alert>
+        )}
+
+        {successMessage && (
+          <Alert variant="success" className="mb-4">
+            {successMessage}
           </Alert>
         )}
 

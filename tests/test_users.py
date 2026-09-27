@@ -5,8 +5,10 @@ Integration Tests for User Endpoints (/users/)
 import pytest
 from fastapi import status
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.user import User
+from app.core.security import create_access_token, hash_password
+from app.models.user import User, UserRole
 
 
 @pytest.mark.asyncio
@@ -344,5 +346,101 @@ async def test_deactivate_already_orphaned_reports_safe(
     deact_res = await client.patch(f"/users/{sup_id}/deactivate", headers=admin_headers)
     assert deact_res.status_code == status.HTTP_200_OK
     assert deact_res.json()["is_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_deactivated_employee_excluded_from_direct_reports(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    admin_headers: dict[str, str],
+) -> None:
+    """
+    Regression test for FIX A:
+    A soft-removed (deactivated) employee must NOT appear in direct reports
+    (neither /users/{manager_id}/direct-reports nor /users/me/reports),
+    and DOES reappear after being reactivated.
+    """
+    # 1. Create a manager directly in test DB with must_change_password=False
+    manager = User(
+        full_name="Manager Bob",
+        email="manager.bob@example.com",
+        hashed_password=hash_password("password123"),
+        role=UserRole.EMPLOYEE,
+        access_level=2,
+        employee_code="EMP-1020",
+        must_change_password=False,
+    )
+    db_session.add(manager)
+    await db_session.commit()
+    await db_session.refresh(manager)
+    mgr_id = manager.id
+
+    # Manager auth headers
+    mgr_token = create_access_token(email="manager.bob@example.com", role=UserRole.EMPLOYEE.value)
+    mgr_headers = {"Authorization": f"Bearer {mgr_token}"}
+
+    # 2. Create a report under manager
+    rep_res = await client.post(
+        "/users/employees",
+        json={
+            "full_name": "Report Alice",
+            "email": "report.alice@example.com",
+            "reports_to_id": mgr_id,
+            "designation": "Software Engineer",
+        },
+        headers=admin_headers,
+    )
+    assert rep_res.status_code == status.HTTP_201_CREATED
+    rep_id = rep_res.json()["id"]
+
+    # 3. Initially, direct reports includes Alice (checked via both endpoints)
+    direct_res = await client.get(f"/users/{mgr_id}/direct-reports", headers=admin_headers)
+    assert direct_res.status_code == status.HTTP_200_OK
+    assert rep_id in [u["id"] for u in direct_res.json()]
+
+    me_reports_res = await client.get("/users/me/reports", headers=mgr_headers)
+    assert me_reports_res.status_code == status.HTTP_200_OK
+    assert rep_id in [u["id"] for u in me_reports_res.json()]
+
+    mgr_direct_res = await client.get(f"/users/{mgr_id}/direct-reports", headers=mgr_headers)
+    assert mgr_direct_res.status_code == status.HTTP_200_OK
+    assert rep_id in [u["id"] for u in mgr_direct_res.json()]
+
+    # 4. Deactivate Alice
+    deact_res = await client.patch(f"/users/{rep_id}/deactivate", headers=admin_headers)
+    assert deact_res.status_code == status.HTTP_200_OK
+    assert deact_res.json()["is_active"] is False
+
+    # 5. Verify Alice does NOT appear in direct reports (both endpoints)
+    direct_res_after = await client.get(f"/users/{mgr_id}/direct-reports", headers=admin_headers)
+    assert direct_res_after.status_code == status.HTTP_200_OK
+    assert rep_id not in [u["id"] for u in direct_res_after.json()]
+
+    me_reports_after = await client.get("/users/me/reports", headers=mgr_headers)
+    assert me_reports_after.status_code == status.HTTP_200_OK
+    assert rep_id not in [u["id"] for u in me_reports_after.json()]
+
+    mgr_direct_res_after = await client.get(f"/users/{mgr_id}/direct-reports", headers=mgr_headers)
+    assert mgr_direct_res_after.status_code == status.HTTP_200_OK
+    assert rep_id not in [u["id"] for u in mgr_direct_res_after.json()]
+
+    # 6. Reactivate Alice
+    react_res = await client.patch(f"/users/{rep_id}/reactivate", headers=admin_headers)
+    assert react_res.status_code == status.HTTP_200_OK
+    assert react_res.json()["is_active"] is True
+
+    # 7. Verify Alice DOES reappear in direct reports (both endpoints)
+    direct_res_restored = await client.get(f"/users/{mgr_id}/direct-reports", headers=admin_headers)
+    assert direct_res_restored.status_code == status.HTTP_200_OK
+    assert rep_id in [u["id"] for u in direct_res_restored.json()]
+
+    me_reports_restored = await client.get("/users/me/reports", headers=mgr_headers)
+    assert me_reports_restored.status_code == status.HTTP_200_OK
+    assert rep_id in [u["id"] for u in me_reports_restored.json()]
+
+    mgr_direct_res_restored = await client.get(f"/users/{mgr_id}/direct-reports", headers=mgr_headers)
+    assert mgr_direct_res_restored.status_code == status.HTTP_200_OK
+    assert rep_id in [u["id"] for u in mgr_direct_res_restored.json()]
+
 
 
