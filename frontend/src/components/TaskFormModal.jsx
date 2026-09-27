@@ -24,6 +24,7 @@ export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null, 
   const [errors, setErrors] = useState({});
   const [serverError, setServerError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isConflict, setIsConflict] = useState(false);
 
   // Fetch employee list for assignment dropdown or use provided assignableEmployees
   useEffect(() => {
@@ -73,7 +74,30 @@ export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null, 
     }
     setErrors({});
     setServerError('');
+    setIsConflict(false);
   }, [editingTask, isOpen]);
+
+  const handleReloadTask = async () => {
+    if (!editingTask?.id) return;
+    try {
+      setIsSubmitting(true);
+      const res = await api.get(`/tasks/${editingTask.id}`);
+      const freshTask = res.data;
+      setTitle(freshTask.title || '');
+      setDescription(freshTask.description || '');
+      setPriority(freshTask.priority || 'MEDIUM');
+      setStatus(freshTask.status || 'PENDING');
+      setDueDatetime(formatToDatetimeLocal(freshTask.due_datetime || freshTask.due_date));
+      setAssignedTo(freshTask.assigned_to ? String(freshTask.assigned_to) : '');
+      editingTask.version = freshTask.version;
+      setServerError('');
+      setIsConflict(false);
+    } catch {
+      setServerError('Failed to fetch the latest task version.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const validate = () => {
     const newErrors = {};
@@ -96,6 +120,7 @@ export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null, 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setServerError('');
+    setIsConflict(false);
 
     if (!validate()) return;
 
@@ -114,6 +139,7 @@ export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null, 
 
       if (isEditMode) {
         payload.status = status;
+        payload.version = editingTask.version;
         await api.patch(`/tasks/${editingTask.id}`, payload);
       } else {
         await api.post('/tasks/', payload);
@@ -122,8 +148,14 @@ export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null, 
       onSuccess();
       onClose();
     } catch (err) {
-      const msg = err.response?.data?.detail || 'Failed to save task. Please check your inputs.';
-      setServerError(msg);
+      if (err.response?.status === 409) {
+        const msg = err.response?.data?.detail || 'This task was updated elsewhere. Please refresh and try again.';
+        setServerError(msg);
+        setIsConflict(true);
+      } else {
+        const msg = err.response?.data?.detail || 'Failed to save task. Please check your inputs.';
+        setServerError(msg);
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -168,7 +200,21 @@ export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null, 
       <form onSubmit={handleSubmit} className="space-y-4" noValidate>
         {serverError && (
           <Alert variant="danger" className="mb-2">
-            {serverError}
+            <div className="flex flex-col gap-2">
+              <span>{serverError}</span>
+              {isConflict && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleReloadTask}
+                  disabled={isSubmitting}
+                  className="self-start text-xs"
+                >
+                  Reload Latest Task Data
+                </Button>
+              )}
+            </div>
           </Alert>
         )}
 

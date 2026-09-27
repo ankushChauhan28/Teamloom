@@ -153,18 +153,19 @@ async def test_employee_update_status_and_completed_at_timestamp(
     # Transition to COMPLETED
     status_res = await client.patch(
         f"/tasks/{task_id}",
-        json={"status": "COMPLETED"},
+        json={"status": "COMPLETED", "version": 1},
         headers=employee_headers,
     )
     assert status_res.status_code == status.HTTP_200_OK
     comp_data = status_res.json()
     assert comp_data["status"] == "COMPLETED"
     assert comp_data["completed_at"] is not None
+    assert comp_data["version"] == 2
 
     # Attempting to modify a completed task fails with 400 Bad Request
     in_prog_res = await client.patch(
         f"/tasks/{task_id}",
-        json={"status": "IN_PROGRESS"},
+        json={"status": "IN_PROGRESS", "version": 2},
         headers=employee_headers,
     )
     assert in_prog_res.status_code == status.HTTP_400_BAD_REQUEST
@@ -173,7 +174,7 @@ async def test_employee_update_status_and_completed_at_timestamp(
     # Editing unauthorized title field fails with 403
     title_res = await client.patch(
         f"/tasks/{task_id}",
-        json={"title": "Hacked Title"},
+        json={"title": "Hacked Title", "version": 2},
         headers=employee_headers,
     )
     assert title_res.status_code == status.HTTP_403_FORBIDDEN
@@ -216,18 +217,12 @@ async def test_concurrent_status_update_raises_409_on_conflict(
     employee_user: User,
 ) -> None:
     """
-    Test simulating two workers loading the same task:
-    Worker 1 updates status to COMPLETED (commits successfully).
-    Worker 2 attempts to update status to IN_PROGRESS with stale version (should raise 409).
-    Verify final database state: status and completed_at are consistent (no zombie timestamps).
-    Verify no other task fields are corrupted.
+    Test optimistic locking across real separate HTTP requests:
+    1. Worker 1 and Worker 2 both observe the same task at version 1.
+    2. Worker 1 PATCHes the task with version=1 -> succeeds (200 OK), new version is 2.
+    3. Worker 2 PATCHes the task with the now-stale version=1 -> rejected with 409 Conflict.
+    4. Confirm task state in DB remains untouched by the rejected stale update.
     """
-    from app.core.exceptions import AppException
-    from app.models.task import TaskStatus
-    from app.schemas.task import TaskUpdateStatus
-    from app.services import task_service
-    from tests.conftest import TestingSessionLocal
-
     # 1. Create a task via API
     create_res = await client.post(
         "/tasks/",
@@ -242,39 +237,122 @@ async def test_concurrent_status_update_raises_409_on_conflict(
     )
     assert create_res.status_code == status.HTTP_201_CREATED
     task_id = create_res.json()["id"]
+    assert create_res.json()["version"] == 1
 
-    # 2. Simulate two workers loading the same task simultaneously
-    async with TestingSessionLocal() as session1, TestingSessionLocal() as session2:
-        t1 = await task_service.get_task_by_id(session1, task_id, employee_user)
-        t2 = await task_service.get_task_by_id(session2, task_id, employee_user)
-        assert t1.version == 1
-        assert t2.version == 1
+    # Both workers read the task at version 1
+    w1_read = await client.get(f"/tasks/{task_id}", headers=employee_headers)
+    assert w1_read.status_code == status.HTTP_200_OK
+    assert w1_read.json()["version"] == 1
 
-        # Worker 1 updates status to COMPLETED and commits
-        updated_t1 = await task_service.update_task(
-            session1, task_id, TaskUpdateStatus(status=TaskStatus.COMPLETED), employee_user
-        )
-        assert updated_t1.status == TaskStatus.COMPLETED
-        assert updated_t1.completed_at is not None
-        assert updated_t1.version == 2
+    # Worker 1 updates status to COMPLETED using version=1
+    w1_patch = await client.patch(
+        f"/tasks/{task_id}",
+        json={"status": "COMPLETED", "version": 1},
+        headers=employee_headers,
+    )
+    assert w1_patch.status_code == status.HTTP_200_OK
+    w1_data = w1_patch.json()
+    assert w1_data["status"] == "COMPLETED"
+    assert w1_data["completed_at"] is not None
+    assert w1_data["version"] == 2
 
-        # Worker 2 tries to update status to IN_PROGRESS (holding stale version 1)
-        with pytest.raises(AppException) as exc_info:
-            await task_service.update_task(
-                session2, task_id, TaskUpdateStatus(status=TaskStatus.IN_PROGRESS), employee_user
-            )
-        assert exc_info.value.status_code == 409
-        assert "modified concurrently" in exc_info.value.detail.lower()
+    # Worker 2 attempts update using stale version=1
+    w2_patch = await client.patch(
+        f"/tasks/{task_id}",
+        json={"status": "IN_PROGRESS", "version": 1},
+        headers=employee_headers,
+    )
+    assert w2_patch.status_code == status.HTTP_409_CONFLICT
+    assert "modified concurrently" in w2_patch.json()["detail"].lower()
 
-    # 3. Verify final DB state via API: status and completed_at are consistent (no zombie timestamps)
+    # Verify final DB state via API: status and completed_at remain from Worker 1
     verify_res = await client.get(f"/tasks/{task_id}", headers=employee_headers)
     assert verify_res.status_code == status.HTTP_200_OK
     final_data = verify_res.json()
     assert final_data["status"] == "COMPLETED"
     assert final_data["completed_at"] is not None
-    assert final_data["title"] == "Concurrent Task Race Test"
-    assert final_data["description"] == "Testing optimistic locking"
-    assert final_data["priority"] == "HIGH"
+    assert final_data["version"] == 2
+
+
+@pytest.mark.asyncio
+async def test_task_update_happy_path_increments_version(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    employee_user: User,
+) -> None:
+    """
+    Happy path test:
+    PATCH with the current correct version succeeds normally and returns an incremented version.
+    """
+    create_res = await client.post(
+        "/tasks/",
+        json={
+            "title": "Version Increment Task",
+            "description": "Initial description",
+            "priority": "LOW",
+            "due_datetime": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+            "assigned_to": employee_user.id,
+        },
+        headers=admin_headers,
+    )
+    assert create_res.status_code == status.HTTP_201_CREATED
+    task_id = create_res.json()["id"]
+    assert create_res.json()["version"] == 1
+
+    # Update 1: version 1 -> 2
+    patch1 = await client.patch(
+        f"/tasks/{task_id}",
+        json={"title": "Updated Title v2", "version": 1},
+        headers=admin_headers,
+    )
+    assert patch1.status_code == status.HTTP_200_OK
+    assert patch1.json()["title"] == "Updated Title v2"
+    assert patch1.json()["version"] == 2
+
+    # Update 2: version 2 -> 3
+    patch2 = await client.patch(
+        f"/tasks/{task_id}",
+        json={"title": "Updated Title v3", "version": 2},
+        headers=admin_headers,
+    )
+    assert patch2.status_code == status.HTTP_200_OK
+    assert patch2.json()["title"] == "Updated Title v3"
+    assert patch2.json()["version"] == 3
+
+
+@pytest.mark.asyncio
+async def test_task_update_missing_version_returns_422(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    employee_user: User,
+) -> None:
+    """
+    Validation test:
+    A PATCH request missing the required 'version' field returns HTTP 422 Unprocessable Entity,
+    not a 500 error.
+    """
+    create_res = await client.post(
+        "/tasks/",
+        json={
+            "title": "Missing Version Task",
+            "description": "Validation test",
+            "priority": "LOW",
+            "due_datetime": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+            "assigned_to": employee_user.id,
+        },
+        headers=admin_headers,
+    )
+    assert create_res.status_code == status.HTTP_201_CREATED
+    task_id = create_res.json()["id"]
+
+    res = await client.patch(
+        f"/tasks/{task_id}",
+        json={"title": "Title Without Version"},
+        headers=admin_headers,
+    )
+    assert res.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    errors = res.json()["detail"]
+    assert any("version" in str(err["loc"]) for err in errors)
 
 
 @pytest.mark.asyncio

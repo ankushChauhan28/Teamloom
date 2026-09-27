@@ -17,6 +17,7 @@ class TaskCreate(TaskBase):
 
 
 class TaskUpdate(BaseModel):
+    version: int
     title: str | None = None
     description: str | None = None
     status: TaskStatus | None = None
@@ -26,6 +27,7 @@ class TaskUpdate(BaseModel):
 
 
 class TaskUpdateStatus(BaseModel):
+    version: int
     status: TaskStatus
 
 
@@ -33,6 +35,7 @@ class TaskRead(TaskBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    version: int
     status: TaskStatus
     assigned_to: int
     created_by: int

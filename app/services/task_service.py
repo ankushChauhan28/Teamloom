@@ -169,7 +169,16 @@ async def update_task(
     """
     db_task = await get_task_by_id(db, task_id, user)
 
+    # Optimistic locking: compare incoming client version against current DB version
+    if getattr(task_update, "version", None) is not None:
+        if db_task.version != task_update.version:
+            raise AppException(
+                status_code=409,
+                detail="Task was modified concurrently. Please refresh and retry.",
+            )
+
     update_data = task_update.model_dump(exclude_unset=True)
+    update_data.pop("version", None)
 
     # Enforce update constraints for non-admin
     is_admin = getattr(user, "access_level", None) == 1 or user.role == UserRole.ADMIN

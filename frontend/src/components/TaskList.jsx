@@ -32,16 +32,28 @@ export function TaskList() {
   }, [fetchTasks]);
 
   const handleStatusChange = async (taskId, newStatus) => {
-    // 1. Call API to update task status
-    const res = await api.patch(`/tasks/${taskId}`, { status: newStatus });
-    const updatedTask = res.data;
+    const currentTask = tasks.find((t) => t.id === taskId);
+    try {
+      // 1. Call API to update task status with current version
+      const res = await api.patch(`/tasks/${taskId}`, {
+        status: newStatus,
+        version: currentTask?.version,
+      });
+      const updatedTask = res.data;
 
-    // 2. Update task in local state on success
-    setTasks((prevTasks) =>
-      prevTasks.map((t) => (t.id === taskId ? updatedTask : t))
-    );
+      // 2. Update task in local state on success
+      setTasks((prevTasks) =>
+        prevTasks.map((t) => (t.id === taskId ? updatedTask : t))
+      );
 
-    return updatedTask;
+      return updatedTask;
+    } catch (err) {
+      if (err.response?.status === 409) {
+        setError('This task was updated elsewhere. Refreshing your task list...');
+        await fetchTasks();
+      }
+      throw err;
+    }
   };
 
   if (isLoading) {
