@@ -1,3 +1,4 @@
+import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -11,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import AuthenticationException, AuthorizationException
 from app.db.session import get_db
-from app.models.user import User, UserRole
+from app.models.revoked_token import RevokedToken
+from app.models.user import User
 
 
 def hash_password(password: str) -> str:
@@ -126,6 +128,13 @@ async def get_current_user(
     except jwt.InvalidTokenError:
         raise AuthenticationException("Invalid access token.")
 
+    token_jti = payload.get("jti") or hashlib.sha256(token.encode("utf-8")).hexdigest()
+    revoked_result = await db.execute(
+        select(RevokedToken).where(RevokedToken.token_jti == token_jti)
+    )
+    if revoked_result.scalar_one_or_none() is not None:
+        raise AuthenticationException("Token has been revoked.")
+
     email = payload.get("sub")
     if not email:
         raise AuthenticationException("Invalid access token payload.")
@@ -136,25 +145,6 @@ async def get_current_user(
         raise AuthenticationException("User not found.")
 
     return user
-
-
-def require_role(required_role: UserRole):
-    """
-    Dependency factory to enforce role-based access control.
-    Supports both legacy UserRole and new access_level (access_level == 1 satisfies ADMIN).
-    """
-
-    async def dependency(
-        current_user: User = Depends(require_password_change_cleared),
-    ) -> User:
-        is_admin_tier = hasattr(current_user, "access_level") and current_user.access_level == 1
-        if current_user.role != required_role and not (
-            required_role == UserRole.ADMIN and is_admin_tier
-        ):
-            raise AuthorizationException(f"Action requires {required_role.value} role.")
-        return current_user
-
-    return dependency
 
 
 async def require_password_change_cleared(

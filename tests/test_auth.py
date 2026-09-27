@@ -219,13 +219,14 @@ async def test_logout_user_success(client: AsyncClient, employee_user: User) -> 
     """
     Test logging out clears the refresh_token cookie and revokes the token server-side.
     """
-    await client.post(
+    login_res = await client.post(
         "/auth/login",
         json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
     )
     assert "refresh_token" in client.cookies
+    access_token = login_res.json()["access_token"]
 
-    response = await client.post("/auth/logout")
+    response = await client.post("/auth/logout", headers={"Authorization": f"Bearer {access_token}"})
     assert response.status_code == status.HTTP_200_OK
     assert response.json()["message"] == "Logged out successfully"
     assert "refresh_token" not in client.cookies
@@ -243,9 +244,10 @@ async def test_logout_revokes_token_immediately(client: AsyncClient, employee_us
     assert login_res.status_code == status.HTTP_200_OK
     stolen_token = client.cookies.get("refresh_token")
     assert stolen_token is not None
+    access_token = login_res.json()["access_token"]
 
     # Perform logout
-    logout_res = await client.post("/auth/logout")
+    logout_res = await client.post("/auth/logout", headers={"Authorization": f"Bearer {access_token}"})
     assert logout_res.status_code == status.HTTP_200_OK
 
     # Attempt to reuse the token after logout
@@ -269,9 +271,10 @@ async def test_stolen_token_after_logout_rejected(
     assert login_res.status_code == status.HTTP_200_OK
     stolen_token = client.cookies.get("refresh_token")
     assert stolen_token is not None
+    access_token = login_res.json()["access_token"]
 
     # User logs out
-    await client.post("/auth/logout")
+    await client.post("/auth/logout", headers={"Authorization": f"Bearer {access_token}"})
 
     # Attacker uses stolen token
     client.cookies.set("refresh_token", stolen_token, path="/auth")
@@ -383,5 +386,183 @@ async def test_cleanup_job_removes_only_expired_tokens(
     # Verify scheduler start and clean shutdown lifecycle
     start_scheduler()
     shutdown_scheduler()
+
+
+@pytest.mark.asyncio
+async def test_access_token_revoked_after_logout_employee(
+    client: AsyncClient, employee_user: User
+) -> None:
+    """
+    QA Regression (a):
+    Capture an access token, log out, replay the same access token against protected endpoint
+    (/users/me) -> must be rejected (401), not 200.
+    """
+    login_res = await client.post(
+        "/auth/login",
+        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+    )
+    assert login_res.status_code == status.HTTP_200_OK
+    access_token = login_res.json()["access_token"]
+
+    # Verify protected endpoint works before logout
+    pre_res = await client.get("/users/me", headers={"Authorization": f"Bearer {access_token}"})
+    assert pre_res.status_code == status.HTTP_200_OK
+
+    # Log out
+    logout_res = await client.post(
+        "/auth/logout", headers={"Authorization": f"Bearer {access_token}"}
+    )
+    assert logout_res.status_code == status.HTTP_200_OK
+
+    # Replay same access token against protected endpoint -> must return 401
+    post_res = await client.get("/users/me", headers={"Authorization": f"Bearer {access_token}"})
+    assert post_res.status_code == status.HTTP_401_UNAUTHORIZED
+    assert "revoked" in post_res.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_refresh_token_revoked_after_logout_employee(
+    client: AsyncClient, employee_user: User
+) -> None:
+    """
+    QA Regression (b):
+    Capture a refresh_token cookie, log out, replay it against /auth/refresh
+    -> must be rejected (401), not issue new tokens.
+    """
+    login_res = await client.post(
+        "/auth/login",
+        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+    )
+    assert login_res.status_code == status.HTTP_200_OK
+    access_token = login_res.json()["access_token"]
+    refresh_token = client.cookies.get("refresh_token")
+    assert refresh_token is not None
+
+    # Log out
+    logout_res = await client.post(
+        "/auth/logout", headers={"Authorization": f"Bearer {access_token}"}
+    )
+    assert logout_res.status_code == status.HTTP_200_OK
+
+    # Replay refresh token against /auth/refresh -> must return 401
+    client.cookies.set("refresh_token", refresh_token, path="/auth")
+    refresh_res = await client.post("/auth/refresh")
+    assert refresh_res.status_code == status.HTTP_401_UNAUTHORIZED
+    assert "revoked" in refresh_res.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_logout_revocation_admin_tier(
+    client: AsyncClient, admin_user: User
+) -> None:
+    """
+    QA Regression (c):
+    Repeat access token and refresh token revocation verification for an Admin-tier user
+    to confirm the fix is not tier-specific.
+    """
+    login_res = await client.post(
+        "/auth/login",
+        json={"employee_code": admin_user.employee_code, "password": "adminpassword123"},
+    )
+    assert login_res.status_code == status.HTTP_200_OK
+    access_token = login_res.json()["access_token"]
+    refresh_token = client.cookies.get("refresh_token")
+    assert refresh_token is not None
+
+    # Verify protected endpoint works before logout
+    pre_res = await client.get("/users/me", headers={"Authorization": f"Bearer {access_token}"})
+    assert pre_res.status_code == status.HTTP_200_OK
+
+    # Log out admin
+    logout_res = await client.post(
+        "/auth/logout", headers={"Authorization": f"Bearer {access_token}"}
+    )
+    assert logout_res.status_code == status.HTTP_200_OK
+
+    # 1. Admin access token replayed -> 401
+    post_res = await client.get("/users/me", headers={"Authorization": f"Bearer {access_token}"})
+    assert post_res.status_code == status.HTTP_401_UNAUTHORIZED
+    assert "revoked" in post_res.json()["detail"].lower()
+
+    # 2. Admin refresh token replayed -> 401
+    client.cookies.set("refresh_token", refresh_token, path="/auth")
+    refresh_res = await client.post("/auth/refresh")
+    assert refresh_res.status_code == status.HTTP_401_UNAUTHORIZED
+    assert "revoked" in refresh_res.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_old_refresh_token_rejected_post_rotation(
+    client: AsyncClient, employee_user: User
+) -> None:
+    """
+    QA Regression (d):
+    After a successful token refresh, replay the OLD (pre-rotation) refresh token
+    against /auth/refresh -> must be rejected (401), while the NEW refresh token succeeds.
+    """
+    login_res = await client.post(
+        "/auth/login",
+        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+    )
+    assert login_res.status_code == status.HTTP_200_OK
+    old_refresh_token = client.cookies.get("refresh_token")
+    assert old_refresh_token is not None
+
+    # Rotate refresh token
+    refresh_res_1 = await client.post("/auth/refresh")
+    assert refresh_res_1.status_code == status.HTTP_200_OK
+    new_refresh_token = client.cookies.get("refresh_token")
+    assert new_refresh_token is not None
+    assert new_refresh_token != old_refresh_token
+
+    # Replay OLD (pre-rotation) refresh token -> must be rejected with 401
+    client.cookies.set("refresh_token", old_refresh_token, path="/auth")
+    replay_old_res = await client.post("/auth/refresh")
+    assert replay_old_res.status_code == status.HTTP_401_UNAUTHORIZED
+    assert "revoked" in replay_old_res.json()["detail"].lower()
+
+    # The NEW refresh token should still be valid
+    client.cookies.set("refresh_token", new_refresh_token, path="/auth")
+    valid_res = await client.post("/auth/refresh")
+    assert valid_res.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.asyncio
+async def test_logout_without_access_token_returns_401(client: AsyncClient) -> None:
+    """
+    Verify that calling /auth/logout without a valid access token returns HTTP 401.
+    """
+    response = await client.post("/auth/logout")
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.asyncio
+async def test_logout_without_refresh_cookie_still_revokes_access_token(
+    client: AsyncClient, employee_user: User
+) -> None:
+    """
+    Verify that if an API client logs out with only Bearer access token (no cookie present),
+    the access token is still revoked server-side.
+    """
+    login_res = await client.post(
+        "/auth/login",
+        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+    )
+    access_token = login_res.json()["access_token"]
+
+    # Clear cookie before logout
+    client.cookies.clear()
+
+    # Logout with Bearer token only
+    logout_res = await client.post(
+        "/auth/logout", headers={"Authorization": f"Bearer {access_token}"}
+    )
+    assert logout_res.status_code == status.HTTP_200_OK
+
+    # Verify access token is revoked
+    post_res = await client.get("/users/me", headers={"Authorization": f"Bearer {access_token}"})
+    assert post_res.status_code == status.HTTP_401_UNAUTHORIZED
+    assert "revoked" in post_res.json()["detail"].lower()
+
 
 

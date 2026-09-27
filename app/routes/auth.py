@@ -1,3 +1,4 @@
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -5,7 +6,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import AuthenticationException
 from app.core.rate_limit import RateLimiter, get_rate_limiter
-from app.core.security import create_access_token, create_refresh_token, get_current_user
+from app.core.security import (
+    create_access_token,
+    create_refresh_token,
+    decode_access_token,
+    get_current_user,
+    oauth2_scheme,
+)
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.user import PasswordChange, Token, UserLogin, UserRead
@@ -139,11 +146,25 @@ async def refresh(request: Request, response: Response, db: AsyncSession = Depen
 async def logout(
     request: Request,
     response: Response,
+    token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Revokes the refresh_token in database and clears the httpOnly refresh_token cookie.
+    Revokes the access token and (if present) the refresh_token in database,
+    and clears the httpOnly refresh_token cookie.
+    Requires a valid access token in Authorization: Bearer header.
     """
+    try:
+        decode_access_token(token)
+    except jwt.ExpiredSignatureError:
+        raise AuthenticationException("Access token has expired.")
+    except jwt.InvalidTokenError:
+        raise AuthenticationException("Invalid access token.")
+
+    # Always revoke the access token
+    await auth_service.revoke_token(db=db, token=token)
+
+    # Revoke the refresh token cookie if present
     refresh_token = request.cookies.get("refresh_token")
     if refresh_token:
         await auth_service.revoke_token(db=db, token=refresh_token)

@@ -13,6 +13,7 @@ from app.core.exceptions import (
 from app.core.security import (
     create_access_token,
     create_refresh_token,
+    decode_access_token,
     decode_refresh_token,
     hash_password,
     verify_password,
@@ -101,14 +102,19 @@ async def revoke_token(db: AsyncSession, token: str) -> None:
     Extracts token_jti and expiration timestamp from JWT payload and inserts it into
     the revoked_tokens table. Handles malformed or already-revoked tokens gracefully and idempotently.
     """
+    payload = None
     try:
-        payload = decode_refresh_token(token)
-    except jwt.ExpiredSignatureError:
+        payload = decode_access_token(token)
+    except Exception:
+        pass
+
+    if not payload:
         try:
-            payload = jwt.decode(token, options={"verify_signature": False})
+            payload = decode_refresh_token(token)
         except Exception:
-            return
-    except jwt.InvalidTokenError:
+            pass
+
+    if not payload:
         try:
             payload = jwt.decode(token, options={"verify_signature": False})
         except Exception:
@@ -165,6 +171,10 @@ async def refresh_access_token(db: AsyncSession, refresh_token: str) -> tuple[st
 
     new_access_token = create_access_token(email=user.email, role=user.role.value)
     new_refresh_token = create_refresh_token(email=user.email, role=user.role.value)
+
+    # Revoke old refresh token post-rotation so it cannot be reused
+    await revoke_token(db=db, token=refresh_token)
+
     return new_access_token, new_refresh_token
 
 
