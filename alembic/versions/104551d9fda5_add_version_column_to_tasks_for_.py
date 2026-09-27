@@ -1,4 +1,4 @@
-"""add version column to tasks for optimistic locking
+"""alter users employee_code nullable and drop revoked_tokens jti unique constraint
 
 Revision ID: 104551d9fda5
 Revises: i9j0k1l2m3n4

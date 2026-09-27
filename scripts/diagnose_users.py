@@ -89,14 +89,12 @@ async def setup_and_diagnose():
             tier = u.access_level
             tier_counts[tier] = tier_counts.get(tier, 0) + 1
 
-            is_locked = False
             lock_str = "None"
             if u.locked_until:
                 lock_dt = u.locked_until
                 if lock_dt.tzinfo is None:
                     lock_dt = lock_dt.replace(tzinfo=timezone.utc)
                 if lock_dt > now:
-                    is_locked = True
                     lock_str = str(u.locked_until)
                     locked_users.append(u)
                 else:

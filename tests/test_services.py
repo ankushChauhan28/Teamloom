@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
+    AppException,
     AuthorizationException,
     BadRequestException,
     InvalidCredentialsException,
@@ -468,7 +469,7 @@ async def test_unit_update_task_employee_disallowed_field_raises_exception(
     )
     task = await task_service.create_task(db=db_session, task_in=task_in, creator=admin_user)
 
-    update_in = TaskUpdate(title="New Unauthorized Title")
+    update_in = TaskUpdate(version=task.version, title="New Unauthorized Title")
     with pytest.raises(AuthorizationException) as exc_info:
         await task_service.update_task(
             db=db_session, task_id=task.id, task_update=update_in, user=employee_user
@@ -503,7 +504,7 @@ async def test_unit_task_status_transition_updates_completed_at(
 ) -> None:
     """
     Unit Test: Transitioning task to COMPLETED automatically populates completed_at timestamp,
-    and transitioning to IN_PROGRESS resets completed_at back to None.
+    and attempting to transition an already-COMPLETED task raises AppException (task immutability).
     """
     task_in = TaskCreate(
         title="Completed Timestamp Test Task",
@@ -515,24 +516,26 @@ async def test_unit_task_status_transition_updates_completed_at(
     task = await task_service.create_task(db=db_session, task_in=task_in, creator=admin_user)
     assert task.completed_at is None
 
-    # Update to COMPLETED
+    # Part a: Update from PENDING to COMPLETED sets completed_at
     updated_comp = await task_service.update_task(
         db=db_session,
         task_id=task.id,
-        task_update=TaskUpdate(status=TaskStatus.COMPLETED),
+        task_update=TaskUpdate(version=task.version, status=TaskStatus.COMPLETED),
         user=admin_user,
     )
     assert updated_comp.completed_at is not None
     assert isinstance(updated_comp.completed_at, datetime)
 
-    # Update to IN_PROGRESS (resets completed_at)
-    updated_reset = await task_service.update_task(
-        db=db_session,
-        task_id=task.id,
-        task_update=TaskUpdate(status=TaskStatus.IN_PROGRESS),
-        user=admin_user,
-    )
-    assert updated_reset.completed_at is None
+    # Part b: Attempting to transition an already-COMPLETED task raises AppException
+    with pytest.raises(AppException) as exc_info:
+        await task_service.update_task(
+            db=db_session,
+            task_id=task.id,
+            task_update=TaskUpdate(version=updated_comp.version, status=TaskStatus.IN_PROGRESS),
+            user=admin_user,
+        )
+    assert exc_info.value.status_code == 400
+    assert "Cannot modify a completed task" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
