@@ -10,7 +10,10 @@ from httpx import AsyncClient
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.user import User
+from app.core.exceptions import AppException
+from app.models.user import User, UserRole
+from app.schemas.user import EmployeeCreate
+from app.services.user_service import create_employee
 
 
 @pytest.mark.asyncio
@@ -278,5 +281,154 @@ async def test_concurrent_employee_creation_no_duplicate_codes(
     codes = [res.json()["employee_code"] for res in responses]
     assert len(codes) == 5
     assert len(set(codes)) == 5
+
+
+@pytest.mark.asyncio
+async def test_employee_creation_happy_path(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+) -> None:
+    """
+    Happy-path regression test:
+    Confirm an admin can create an employee, receiving HTTP 201 Created and
+    a valid sequential employee_code (EMP-XXXX).
+    """
+    response = await client.post(
+        "/users/employees",
+        json={
+            "full_name": "Happy Path Employee",
+            "email": "happy.path@example.com",
+            "designation": "Software Engineer",
+            "access_level": 3,
+        },
+        headers=admin_headers,
+    )
+    assert response.status_code == status.HTTP_201_CREATED
+    data = response.json()
+    assert data["email"] == "happy.path@example.com"
+    assert data["full_name"] == "Happy Path Employee"
+    assert data["employee_code"].startswith("EMP-")
+    assert data["role"] == "EMPLOYEE"
+
+
+@pytest.mark.asyncio
+async def test_employee_creation_sequence_desync_skips_collisions(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    db_session: AsyncSession,
+) -> None:
+    """
+    Simulate exact sequence desync scenario:
+    The database already contains users with employee_code EMP-1001 and EMP-1002.
+    When the sequence produces colliding codes, create_employee catches IntegrityError,
+    retries, and eventually succeeds when a non-colliding code (EMP-1003) is generated.
+    """
+    user1 = User(
+        full_name="Pre-existing 1",
+        email="pre1@example.com",
+        hashed_password="hash",
+        role=UserRole.EMPLOYEE,
+        access_level=3,
+        employee_code="EMP-1001",
+        must_change_password=False,
+    )
+    user2 = User(
+        full_name="Pre-existing 2",
+        email="pre2@example.com",
+        hashed_password="hash",
+        role=UserRole.EMPLOYEE,
+        access_level=3,
+        employee_code="EMP-1002",
+        must_change_password=False,
+    )
+    db_session.add_all([user1, user2])
+    await db_session.commit()
+
+    from tests.conftest import _seq_counter
+    _seq_counter[0] = 1000
+
+    response = await client.post(
+        "/users/employees",
+        json={"full_name": "Desync Survivor", "email": "survivor@example.com"},
+        headers=admin_headers,
+    )
+    assert response.status_code == status.HTTP_201_CREATED
+    data = response.json()
+    assert data["employee_code"] == "EMP-1003"
+    assert data["email"] == "survivor@example.com"
+
+
+@pytest.mark.asyncio
+async def test_employee_creation_desync_exhausts_retries_returns_clean_app_exception(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    db_session: AsyncSession,
+) -> None:
+    """
+    When all 10 retry attempts collide due to severe sequence desync, create_employee()
+    must raise a clean AppException with status_code=500 rather than letting a raw
+    IntegrityError propagate unhandled.
+    """
+    colliding_user = User(
+        full_name="Colliding User",
+        email="colliding@example.com",
+        hashed_password="hash",
+        role=UserRole.EMPLOYEE,
+        access_level=3,
+        employee_code="EMP-9999",
+        must_change_password=False,
+    )
+    db_session.add(colliding_user)
+    await db_session.commit()
+
+    with patch(
+        "app.services.user_service._generate_next_employee_code",
+        return_value="EMP-9999",
+    ):
+        response = await client.post(
+            "/users/employees",
+            json={"full_name": "Exhausted Retries", "email": "exhausted@example.com"},
+            headers=admin_headers,
+        )
+        assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+        detail = response.json().get("detail", "")
+        assert "Failed to generate a unique employee code" in detail
+        assert "please retry" in detail
+
+
+@pytest.mark.asyncio
+async def test_create_employee_service_raises_app_exception_on_exhausted_retries(
+    db_session: AsyncSession,
+) -> None:
+    """
+    Unit test directly on create_employee():
+    Verify that an exhausted retry loop raises AppException with status_code=500.
+    """
+    colliding_user = User(
+        full_name="Colliding Service User",
+        email="colliding_service@example.com",
+        hashed_password="hash",
+        role=UserRole.EMPLOYEE,
+        access_level=3,
+        employee_code="EMP-8888",
+        must_change_password=False,
+    )
+    db_session.add(colliding_user)
+    await db_session.commit()
+
+    emp_in = EmployeeCreate(
+        full_name="Service Test Employee",
+        email="service.test@example.com",
+    )
+
+    with patch(
+        "app.services.user_service._generate_next_employee_code",
+        return_value="EMP-8888",
+    ):
+        with pytest.raises(AppException) as exc_info:
+            await create_employee(db_session, emp_in)
+
+        assert exc_info.value.status_code == 500
+        assert "Failed to generate a unique employee code" in exc_info.value.message
 
 

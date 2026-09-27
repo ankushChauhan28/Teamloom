@@ -3,10 +3,12 @@ import secrets
 import string
 
 from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.email import send_employee_welcome_email
 from app.core.exceptions import (
+    AppException,
     BadRequestException,
     ResourceNotFoundException,
     UserAlreadyExistsException,
@@ -115,7 +117,7 @@ async def create_employee(db: AsyncSession, employee_in: EmployeeCreate) -> tupl
     temp_password = _generate_temp_password()
     hashed_pwd = hash_password(temp_password)
 
-    max_attempts = 5
+    max_attempts = 10
     for attempt in range(max_attempts):
         emp_code = await _generate_next_employee_code(db)
         new_user = User(
@@ -134,6 +136,16 @@ async def create_employee(db: AsyncSession, employee_in: EmployeeCreate) -> tupl
             await db.commit()
             await db.refresh(new_user)
             break
+        except IntegrityError as exc:
+            await db.rollback()
+            logger.warning(
+                f"Employee code collision on attempt {attempt + 1}/{max_attempts} for code {emp_code}: {exc}"
+            )
+            if attempt == max_attempts - 1:
+                raise AppException(
+                    message="Failed to generate a unique employee code after multiple attempts — please retry",
+                    status_code=500,
+                ) from exc
         except Exception:
             await db.rollback()
             if attempt == max_attempts - 1:
@@ -231,10 +243,12 @@ set_user_manager = set_user_reports_to
 
 async def get_user_direct_reports(db: AsyncSession, user_id: int) -> list[User]:
     """
-    Retrieves all users where reports_to_id == user_id.
+    Retrieves all active users where reports_to_id == user_id.
     """
     result = await db.execute(
-        select(User).where(User.reports_to_id == user_id).order_by(User.full_name.asc())
+        select(User)
+        .where(User.reports_to_id == user_id, User.is_active.is_(True))
+        .order_by(User.full_name.asc())
     )
     return list(result.scalars().all())
 
