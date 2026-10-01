@@ -24,8 +24,16 @@ class LeaveRequest(Base):
     end_date = Column(Date, nullable=False)
     status = Column(SQLEnum(LeaveStatus), default=LeaveStatus.PENDING, nullable=False)
     reviewed_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships
+    organization = relationship("Organization", back_populates="leave_requests")
     employee = relationship("User", foreign_keys=[employee_id], back_populates="leave_requests")
     reviewer = relationship("User", foreign_keys=[reviewed_by], back_populates="reviewed_leaves")
+

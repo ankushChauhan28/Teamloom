@@ -35,9 +35,16 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     failed_login_attempts = Column(Integer, default=0, nullable=False)
     locked_until = Column(DateTime(timezone=True), nullable=True, default=None)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships (relationships mapped as strings to avoid circular import issues)
+    organization = relationship("Organization", back_populates="users")
     reports_to = relationship(
         "User",
         remote_side=[id],
@@ -70,3 +77,4 @@ class User(Base):
     reviewed_leaves = relationship(
         "LeaveRequest", foreign_keys="LeaveRequest.reviewed_by", back_populates="reviewer"
     )
+

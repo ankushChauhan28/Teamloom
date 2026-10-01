@@ -10,7 +10,9 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_access_token, hash_password
+from app.models.organization import Organization
 from app.models.user import User, UserRole
+
 
 
 @pytest.mark.asyncio
@@ -141,8 +143,10 @@ async def test_employee_cannot_bypass_reports_to_id_via_update_me(
 
 @pytest.mark.asyncio
 async def test_tier3_user_can_assign_task_to_direct_report(
+
     client: AsyncClient,
     db_session: AsyncSession,
+    test_org: Organization,
 ) -> None:
     """
     Verify that Tier 3 users CAN assign tasks to their direct reports,
@@ -156,6 +160,7 @@ async def test_tier3_user_can_assign_task_to_direct_report(
         access_level=3,
         employee_code="EMP-3001",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(tier3_lead)
     await db_session.commit()
@@ -170,6 +175,7 @@ async def test_tier3_user_can_assign_task_to_direct_report(
         employee_code="EMP-4001",
         reports_to_id=tier3_lead.id,
         must_change_password=False,
+        organization_id=test_org.id,
     )
     non_report = User(
         full_name="Other Associate",
@@ -180,6 +186,7 @@ async def test_tier3_user_can_assign_task_to_direct_report(
         employee_code="EMP-4009",
         reports_to_id=None,
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(tier4_subordinate)
     db_session.add(non_report)
@@ -230,6 +237,7 @@ async def test_tier3_user_can_assign_task_to_direct_report(
 async def test_tier4_user_can_assign_task_to_direct_report(
     client: AsyncClient,
     db_session: AsyncSession,
+    test_org: Organization,
 ) -> None:
     """
     Verify that Tier 4 users CAN assign tasks to their direct reports,
@@ -243,6 +251,7 @@ async def test_tier4_user_can_assign_task_to_direct_report(
         access_level=4,
         employee_code="EMP-4002",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(tier4_user)
     await db_session.commit()
@@ -257,6 +266,7 @@ async def test_tier4_user_can_assign_task_to_direct_report(
         employee_code="EMP-4003",
         reports_to_id=tier4_user.id,
         must_change_password=False,
+        organization_id=test_org.id,
     )
     tier4_non_report = User(
         full_name="Tier 4 Peer",
@@ -267,6 +277,7 @@ async def test_tier4_user_can_assign_task_to_direct_report(
         employee_code="EMP-4004",
         reports_to_id=None,
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(tier4_report)
     db_session.add(tier4_non_report)
@@ -310,6 +321,7 @@ async def test_tier4_user_can_assign_task_to_direct_report(
 async def test_tier2_manager_can_assign_task_to_direct_report_normally(
     client: AsyncClient,
     db_session: AsyncSession,
+    test_org: Organization,
 ) -> None:
     """
     Verify that Tier 2 managers can normally assign tasks to their direct reports.
@@ -322,6 +334,7 @@ async def test_tier2_manager_can_assign_task_to_direct_report_normally(
         access_level=2,
         employee_code="EMP-2005",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(tier2_mgr)
     await db_session.commit()
@@ -336,6 +349,7 @@ async def test_tier2_manager_can_assign_task_to_direct_report_normally(
         employee_code="EMP-3005",
         reports_to_id=tier2_mgr.id,
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(subordinate)
     await db_session.commit()
@@ -362,6 +376,7 @@ async def test_tier2_manager_can_assign_task_to_direct_report_normally(
 async def test_ankush_piyush_mortal_hierarchy_chain_task_assignment(
     client: AsyncClient,
     db_session: AsyncSession,
+    test_org: Organization,
 ) -> None:
     """
     Regression test for the real-world chain:
@@ -380,6 +395,7 @@ async def test_ankush_piyush_mortal_hierarchy_chain_task_assignment(
         employee_code="EMP-1002",
         reports_to_id=None,
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(ankush)
     await db_session.commit()
@@ -394,6 +410,7 @@ async def test_ankush_piyush_mortal_hierarchy_chain_task_assignment(
         employee_code="EMP-1005",
         reports_to_id=ankush.id,
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(piyush)
     await db_session.commit()
@@ -408,10 +425,12 @@ async def test_ankush_piyush_mortal_hierarchy_chain_task_assignment(
         employee_code="EMP-1006",
         reports_to_id=piyush.id,
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(mortal)
     await db_session.commit()
     await db_session.refresh(mortal)
+
 
     ankush_token = create_access_token(email=ankush.email, role=ankush.role.value)
     ankush_headers = {"Authorization": f"Bearer {ankush_token}"}

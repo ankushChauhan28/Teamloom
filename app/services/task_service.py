@@ -52,7 +52,9 @@ async def create_task(db: AsyncSession, task_in: TaskCreate, creator: User) -> T
         due_datetime=task_in.due_datetime,
         assigned_to=task_in.assigned_to,
         created_by=creator.id,
+        organization_id=creator.organization_id,
     )
+
     db.add(db_task)
     await db.commit()
     await db.refresh(db_task)

@@ -97,7 +97,12 @@ async def create_employee(
     Generates employee_code, temporary password, and sends welcome email.
     Never returns plaintext password in API response.
     """
-    new_user, email_sent = await user_service.create_employee(db=db, employee_in=employee_in)
+    new_user, email_sent = await user_service.create_employee(
+        db=db,
+        employee_in=employee_in,
+        organization_id=current_admin.organization_id,
+    )
+
     return EmployeeCreateResponse(
         id=new_user.id,
         full_name=new_user.full_name,

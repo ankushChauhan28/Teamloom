@@ -352,6 +352,7 @@ async def test_deactivate_already_orphaned_reports_safe(
 async def test_deactivated_employee_excluded_from_direct_reports(
     client: AsyncClient,
     db_session: AsyncSession,
+    admin_user: User,
     admin_headers: dict[str, str],
 ) -> None:
     """
@@ -369,7 +370,9 @@ async def test_deactivated_employee_excluded_from_direct_reports(
         access_level=2,
         employee_code="EMP-1020",
         must_change_password=False,
+        organization_id=admin_user.organization_id,
     )
+
     db_session.add(manager)
     await db_session.commit()
     await db_session.refresh(manager)

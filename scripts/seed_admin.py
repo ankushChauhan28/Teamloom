@@ -13,8 +13,10 @@ import app.models.leave  # noqa: F401
 import app.models.task  # noqa: F401
 from app.core.security import hash_password
 from app.db.base import AsyncSessionLocal
+from app.models.organization import Organization
 from app.models.user import User, UserRole
 from app.services.user_service import _generate_next_employee_code
+
 
 
 async def seed_admin():
@@ -52,6 +54,14 @@ async def seed_admin():
                     print("\n[-] Error: Passwords do not match.")
                     return
 
+            org_res = await db.execute(
+                select(Organization.id).where(Organization.is_internal.is_(True)).limit(1)
+            )
+            org_id = org_res.scalar_one_or_none()
+            if not org_id:
+                fallback_res = await db.execute(select(Organization.id).limit(1))
+                org_id = fallback_res.scalar_one_or_none()
+
             emp_code = await _generate_next_employee_code(db)
             hashed_password = hash_password(password)
             admin = User(
@@ -62,7 +72,9 @@ async def seed_admin():
                 access_level=1,
                 employee_code=emp_code,
                 must_change_password=False,
+                organization_id=org_id,
             )
+
             db.add(admin)
             await db.commit()
             await db.refresh(admin)

@@ -22,8 +22,12 @@ async def create_leave(
     Submit a leave request. Accessible by any logged-in user (employee_id matches own ID).
     """
     return await leave_service.create_leave_request(
-        db=db, leave_in=leave_in, employee_id=current_user.id
+        db=db,
+        leave_in=leave_in,
+        employee_id=current_user.id,
+        organization_id=current_user.organization_id,
     )
+
 
 
 @router.get("/", response_model=list[LeaveRead])

@@ -6,12 +6,13 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_access_token, hash_password
+from app.models.organization import Organization
 from app.models.task import Task, TaskPriority, TaskStatus
 from app.models.user import User, UserRole
 
 
 @pytest.fixture
-async def analytics_hierarchy(db_session: AsyncSession):
+async def analytics_hierarchy(db_session: AsyncSession, test_org: Organization):
     """
     Sets up a complete hierarchy for analytics testing:
     - Admin: EMP-2001 (ADMIN role)
@@ -24,8 +25,10 @@ async def analytics_hierarchy(db_session: AsyncSession):
         email="admin.analytics@example.com",
         hashed_password=hash_password("password123"),
         role=UserRole.ADMIN,
+        access_level=1,
         employee_code="EMP-2001",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(admin)
 
@@ -34,8 +37,10 @@ async def analytics_hierarchy(db_session: AsyncSession):
         email="maya.mgr@example.com",
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
+        access_level=2,
         employee_code="EMP-2002",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(manager)
     await db_session.commit()
@@ -46,9 +51,11 @@ async def analytics_hierarchy(db_session: AsyncSession):
         email="rohit.rpt@example.com",
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
+        access_level=3,
         employee_code="EMP-2003",
         reports_to_id=manager.id,
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(report1)
 
@@ -57,12 +64,15 @@ async def analytics_hierarchy(db_session: AsyncSession):
         email="omar.other@example.com",
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
+        access_level=4,
         employee_code="EMP-2004",
         reports_to_id=None,
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(other)
     await db_session.commit()
+
 
     await db_session.refresh(admin)
     await db_session.refresh(manager)
@@ -108,6 +118,7 @@ async def test_employee_sees_only_own_stats(
         status=TaskStatus.PENDING,
         assigned_to=other.id,
         created_by=other.id,
+        organization_id=other.organization_id,
     )
     t2 = Task(
         title="Task 2",
@@ -118,6 +129,7 @@ async def test_employee_sees_only_own_stats(
         completed_at=now,
         assigned_to=other.id,
         created_by=other.id,
+        organization_id=other.organization_id,
     )
     db_session.add_all([t1, t2])
     await db_session.commit()
@@ -174,6 +186,7 @@ async def test_manager_without_employee_id_aggregates_direct_reports(
         status=TaskStatus.PENDING,
         assigned_to=report1.id,
         created_by=report1.id,
+        organization_id=report1.organization_id,
     )
     # Task for other (NOT in team scope)
     t_other = Task(
@@ -184,6 +197,7 @@ async def test_manager_without_employee_id_aggregates_direct_reports(
         status=TaskStatus.PENDING,
         assigned_to=other.id,
         created_by=other.id,
+        organization_id=other.organization_id,
     )
     db_session.add_all([t_report, t_other])
     await db_session.commit()
@@ -217,6 +231,7 @@ async def test_manager_with_direct_report_employee_id(
         status=TaskStatus.PENDING,
         assigned_to=report1.id,
         created_by=report1.id,
+        organization_id=report1.organization_id,
     )
     db_session.add(t)
     await db_session.commit()
@@ -272,6 +287,7 @@ async def test_admin_without_employee_id_returns_org_wide(
         status=TaskStatus.PENDING,
         assigned_to=report1.id,
         created_by=report1.id,
+        organization_id=report1.organization_id,
     )
     t2 = Task(
         title="Org Task 2",
@@ -281,6 +297,7 @@ async def test_admin_without_employee_id_returns_org_wide(
         status=TaskStatus.PENDING,
         assigned_to=other.id,
         created_by=other.id,
+        organization_id=other.organization_id,
     )
     db_session.add_all([t1, t2])
     await db_session.commit()
@@ -313,8 +330,11 @@ async def test_admin_with_any_employee_id_succeeds(
         status=TaskStatus.PENDING,
         assigned_to=other.id,
         created_by=other.id,
+        organization_id=other.organization_id,
     )
     db_session.add(t)
+    await db_session.commit()
+
     await db_session.commit()
 
     res = await client.get(
@@ -351,6 +371,7 @@ async def test_task_state_classification_correctness(
         completed_at=now + timedelta(days=2),
         assigned_to=other.id,
         created_by=other.id,
+        organization_id=other.organization_id,
     )
     # 2. Late: COMPLETED and completed_at > due_datetime
     t_late = Task(
@@ -362,6 +383,7 @@ async def test_task_state_classification_correctness(
         completed_at=now - timedelta(days=2),
         assigned_to=other.id,
         created_by=other.id,
+        organization_id=other.organization_id,
     )
     # 3. Overdue: NOT COMPLETED and due_datetime < now
     t_overdue = Task(
@@ -372,6 +394,7 @@ async def test_task_state_classification_correctness(
         status=TaskStatus.PENDING,
         assigned_to=other.id,
         created_by=other.id,
+        organization_id=other.organization_id,
     )
     # 4. Pending: NOT COMPLETED and due_datetime >= now
     t_pending = Task(
@@ -382,6 +405,7 @@ async def test_task_state_classification_correctness(
         status=TaskStatus.IN_PROGRESS,
         assigned_to=other.id,
         created_by=other.id,
+        organization_id=other.organization_id,
     )
 
     db_session.add_all([t_on_time, t_late, t_overdue, t_pending])
@@ -427,6 +451,7 @@ async def test_completion_rate_zero_completed_tasks_edge_case(
         status=TaskStatus.PENDING,
         assigned_to=other.id,
         created_by=other.id,
+        organization_id=other.organization_id,
     )
     db_session.add(t)
     await db_session.commit()
@@ -463,6 +488,7 @@ async def test_trail_limit_and_hard_cap_enforcement(
             status=TaskStatus.PENDING,
             assigned_to=other.id,
             created_by=other.id,
+            organization_id=other.organization_id,
         )
         for i in range(15)
     ]
@@ -504,6 +530,7 @@ async def test_null_due_datetime_defensive_query_reconciliation(
         status=TaskStatus.PENDING,
         assigned_to=other.id,
         created_by=other.id,
+        organization_id=other.organization_id,
     )
     db_session.add(valid_task)
     await db_session.commit()
@@ -523,6 +550,7 @@ async def test_null_due_datetime_defensive_query_reconciliation(
 async def test_zero_total_tasks_employee_returns_clean_response(
     client: AsyncClient,
     db_session: AsyncSession,
+    test_org: Organization,
 ) -> None:
     """
     Part B1 Test: Brand-new employee with zero tasks ever assigned.
@@ -533,8 +561,10 @@ async def test_zero_total_tasks_employee_returns_clean_response(
         email="zero.emp@example.com",
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
+        access_level=3,
         employee_code="EMP-9999",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(new_user)
     await db_session.commit()
@@ -635,6 +665,7 @@ async def test_aggregate_counts_and_milestone_trail_state_alignment(
         completed_at=now + timedelta(days=2),
         assigned_to=other.id,
         created_by=other.id,
+        organization_id=other.organization_id,
     )
     t2 = Task(
         title="OnTime 2",
@@ -645,6 +676,7 @@ async def test_aggregate_counts_and_milestone_trail_state_alignment(
         completed_at=now + timedelta(days=1),
         assigned_to=other.id,
         created_by=other.id,
+        organization_id=other.organization_id,
     )
     t3 = Task(
         title="Late 1",
@@ -655,6 +687,7 @@ async def test_aggregate_counts_and_milestone_trail_state_alignment(
         completed_at=now - timedelta(days=1),
         assigned_to=other.id,
         created_by=other.id,
+        organization_id=other.organization_id,
     )
     t4 = Task(
         title="Overdue 1",
@@ -664,6 +697,7 @@ async def test_aggregate_counts_and_milestone_trail_state_alignment(
         status=TaskStatus.PENDING,
         assigned_to=other.id,
         created_by=other.id,
+        organization_id=other.organization_id,
     )
     t5 = Task(
         title="Pending 1",
@@ -673,6 +707,7 @@ async def test_aggregate_counts_and_milestone_trail_state_alignment(
         status=TaskStatus.PENDING,
         assigned_to=other.id,
         created_by=other.id,
+        organization_id=other.organization_id,
     )
     t6 = Task(
         title="Pending 2",
@@ -682,6 +717,7 @@ async def test_aggregate_counts_and_milestone_trail_state_alignment(
         status=TaskStatus.IN_PROGRESS,
         assigned_to=other.id,
         created_by=other.id,
+        organization_id=other.organization_id,
     )
 
     db_session.add_all([t1, t2, t3, t4, t5, t6])
@@ -712,3 +748,4 @@ async def test_aggregate_counts_and_milestone_trail_state_alignment(
     assert data["late_count"] == trail_late
     assert data["overdue_count"] == trail_overdue
     assert data["pending_count"] == trail_pending
+

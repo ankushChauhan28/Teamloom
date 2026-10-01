@@ -6,11 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_access_token, hash_password
 from app.models.leave import LeaveRequest, LeaveStatus
+from app.models.organization import Organization
 from app.models.user import User, UserRole
 
 
 @pytest.fixture
-async def manager_hierarchy(db_session: AsyncSession):
+async def manager_hierarchy(db_session: AsyncSession, test_org: Organization):
     """
     Creates a manager hierarchy fixture:
     - Manager: EMP-1010 (EMPLOYEE role, manages Report 1)
@@ -25,6 +26,7 @@ async def manager_hierarchy(db_session: AsyncSession):
         access_level=2,
         employee_code="EMP-1010",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(manager)
     await db_session.commit()
@@ -38,6 +40,7 @@ async def manager_hierarchy(db_session: AsyncSession):
         employee_code="EMP-1011",
         reports_to_id=manager.id,
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(report1)
 
@@ -46,14 +49,17 @@ async def manager_hierarchy(db_session: AsyncSession):
         email="rakesh.other@example.com",
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
+        access_level=4,
         employee_code="EMP-1012",
         reports_to_id=None,
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(other_emp)
     await db_session.commit()
     await db_session.refresh(report1)
     await db_session.refresh(other_emp)
+
 
     mgr_token = create_access_token(email=manager.email, role=manager.role.value)
     report_token = create_access_token(email=report1.email, role=report1.role.value)
@@ -207,6 +213,7 @@ async def test_manager_cannot_approve_direct_report_leave_fails(
         start_date=date(2026, 9, 1),
         end_date=date(2026, 9, 5),
         status=LeaveStatus.PENDING,
+        organization_id=report1.organization_id,
     )
     db_session.add(leave)
     await db_session.commit()
@@ -238,6 +245,7 @@ async def test_manager_cannot_approve_non_report_leave_fails(
         start_date=date(2026, 9, 10),
         end_date=date(2026, 9, 15),
         status=LeaveStatus.PENDING,
+        organization_id=other_emp.organization_id,
     )
     db_session.add(leave)
     await db_session.commit()
@@ -269,6 +277,7 @@ async def test_user_cannot_approve_own_leave_fails(
         start_date=date(2026, 9, 20),
         end_date=date(2026, 9, 21),
         status=LeaveStatus.PENDING,
+        organization_id=manager.organization_id,
     )
     db_session.add(leave)
     await db_session.commit()
@@ -300,6 +309,7 @@ async def test_get_team_leave_requests(
         start_date=date(2026, 10, 1),
         end_date=date(2026, 10, 2),
         status=LeaveStatus.PENDING,
+        organization_id=report1.organization_id,
     )
     db_session.add(leave)
     await db_session.commit()
@@ -353,7 +363,9 @@ async def test_edge_case_plain_employee_leave_review_fails(
         start_date=date(2026, 11, 1),
         end_date=date(2026, 11, 2),
         status=LeaveStatus.PENDING,
+        organization_id=report1.organization_id,
     )
+
     db_session.add(leave)
     await db_session.commit()
 

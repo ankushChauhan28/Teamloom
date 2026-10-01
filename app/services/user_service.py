@@ -14,8 +14,10 @@ from app.core.exceptions import (
     UserAlreadyExistsException,
 )
 from app.core.security import hash_password
+from app.models.organization import Organization
 from app.models.user import User, UserRole
 from app.schemas.user import EmployeeCreate, UserUpdate
+
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +76,11 @@ def _generate_temp_password(length: int = 14) -> str:
     return "".join(pwd)
 
 
-async def create_employee(db: AsyncSession, employee_in: EmployeeCreate) -> tuple[User, bool]:
+async def create_employee(
+    db: AsyncSession,
+    employee_in: EmployeeCreate,
+    organization_id: int | None = None,
+) -> tuple[User, bool]:
     """
     Creates a new employee account:
     - Verifies email uniqueness.
@@ -82,6 +88,7 @@ async def create_employee(db: AsyncSession, employee_in: EmployeeCreate) -> tupl
     - Generates sequential employee_code (EMP-1001, etc) with retry loop for collision safety.
     - Generates temporary password via secrets module.
     - Hashes password and sets must_change_password = True.
+    - Sets organization_id (defaults to default internal organization if None).
     - Attempts to send welcome email via SMTP.
     - Returns tuple of (created_user, email_sent_bool).
     """
@@ -95,6 +102,25 @@ async def create_employee(db: AsyncSession, employee_in: EmployeeCreate) -> tupl
         proposed_mgr = mgr_res.scalar_one_or_none()
         if not proposed_mgr:
             raise ResourceNotFoundException("Reports-to supervisor user not found.")
+
+    if organization_id is None:
+        org_res = await db.execute(
+            select(Organization.id).where(Organization.is_internal.is_(True)).limit(1)
+        )
+        org_id = org_res.scalar_one_or_none()
+        if org_id is None:
+            fallback_res = await db.execute(select(Organization.id).limit(1))
+            org_id = fallback_res.scalar_one_or_none()
+        if org_id is None:
+            default_org = Organization(
+                name="Internal / free forever",
+                status="active",
+                is_internal=True,
+            )
+            db.add(default_org)
+            await db.flush()
+            org_id = default_org.id
+        organization_id = org_id
 
     temp_password = _generate_temp_password()
     hashed_pwd = hash_password(temp_password)
@@ -112,7 +138,9 @@ async def create_employee(db: AsyncSession, employee_in: EmployeeCreate) -> tupl
             designation=employee_in.designation,
             employee_code=emp_code,
             must_change_password=True,
+            organization_id=organization_id,
         )
+
         db.add(new_user)
         try:
             await db.commit()
