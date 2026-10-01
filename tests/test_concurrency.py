@@ -82,8 +82,10 @@ async def test_concurrent_task_optimistic_locking_conflict(
             status=TaskStatus.PENDING,
             assigned_to=employee_user.id,
             created_by=admin_user.id,
+            organization_id=admin_user.organization_id,
             version=1,
         )
+
         session.add(initial_task)
         await session.commit()
         await session.refresh(initial_task)

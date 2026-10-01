@@ -9,7 +9,9 @@ from fastapi import status
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.organization import Organization
 from app.models.user import User, UserRole
+
 
 
 @pytest.mark.asyncio
@@ -406,6 +408,7 @@ async def test_get_tasks_no_n_plus_one_queries(
 async def test_get_team_tasks_no_n_plus_one_queries(
     client: AsyncClient,
     db_session: AsyncSession,
+    test_org: Organization,
 ) -> None:
     """
     Test that retrieving team tasks for a manager with 5 direct reports having 3 tasks each (15 tasks)
@@ -424,6 +427,7 @@ async def test_get_team_tasks_no_n_plus_one_queries(
         role=UserRole.EMPLOYEE,
         employee_code="EMP-9000",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(mgr)
     await db_session.commit()
@@ -443,6 +447,7 @@ async def test_get_team_tasks_no_n_plus_one_queries(
             employee_code=f"EMP-900{r_idx + 1}",
             reports_to_id=mgr.id,
             must_change_password=False,
+            organization_id=test_org.id,
         )
         db_session.add(rep)
         await db_session.commit()
@@ -458,11 +463,13 @@ async def test_get_team_tasks_no_n_plus_one_queries(
                     due_datetime=datetime.now(UTC) + timedelta(days=2),
                     assigned_to=rep.id,
                     created_by=mgr.id,
+                    organization_id=test_org.id,
                 )
             )
 
     db_session.add_all(tasks_to_add)
     await db_session.commit()
+
 
     # 3. Call GET /tasks/team/ and monitor query count
     queries = []

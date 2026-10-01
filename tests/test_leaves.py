@@ -11,7 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import create_access_token, hash_password
 from app.models.leave import LeaveRequest, LeaveStatus
+from app.models.organization import Organization
 from app.models.user import User, UserRole
+
 
 
 @pytest.mark.asyncio
@@ -229,6 +231,7 @@ async def test_tier2_manager_cannot_approve_leave(
     db_session: AsyncSession,
     employee_headers: dict[str, str],
     employee_user: User,
+    test_org: Organization,
 ) -> None:
     """
     Verify that a Tier 2 Manager receives 403 Forbidden when attempting to approve a leave request.
@@ -245,6 +248,7 @@ async def test_tier2_manager_cannot_approve_leave(
         access_level=2,
         employee_code="EMP-1020",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(manager)
     await db_session.commit()
@@ -281,6 +285,7 @@ async def test_tier2_manager_cannot_approve_leave(
 async def test_team_leaves_no_status_param_returns_all_statuses(
     client: AsyncClient,
     db_session: AsyncSession,
+    test_org: Organization,
 ) -> None:
     """
     Regression test (a):
@@ -295,6 +300,7 @@ async def test_team_leaves_no_status_param_returns_all_statuses(
         access_level=2,
         employee_code="EMP-2001",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(manager)
     await db_session.commit()
@@ -309,6 +315,7 @@ async def test_team_leaves_no_status_param_returns_all_statuses(
         employee_code="EMP-2002",
         reports_to_id=manager.id,
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(report)
     await db_session.commit()
@@ -320,6 +327,7 @@ async def test_team_leaves_no_status_param_returns_all_statuses(
         start_date=date(2027, 3, 1),
         end_date=date(2027, 3, 3),
         status=LeaveStatus.PENDING,
+        organization_id=test_org.id,
     )
     l2 = LeaveRequest(
         employee_id=report.id,
@@ -327,6 +335,7 @@ async def test_team_leaves_no_status_param_returns_all_statuses(
         start_date=date(2027, 4, 1),
         end_date=date(2027, 4, 3),
         status=LeaveStatus.APPROVED,
+        organization_id=test_org.id,
     )
     l3 = LeaveRequest(
         employee_id=report.id,
@@ -334,6 +343,7 @@ async def test_team_leaves_no_status_param_returns_all_statuses(
         start_date=date(2027, 5, 1),
         end_date=date(2027, 5, 3),
         status=LeaveStatus.REJECTED,
+        organization_id=test_org.id,
     )
     db_session.add_all([l1, l2, l3])
     await db_session.commit()
@@ -354,6 +364,7 @@ async def test_team_leaves_no_status_param_returns_all_statuses(
 async def test_team_leaves_status_filtering_approved_and_pending(
     client: AsyncClient,
     db_session: AsyncSession,
+    test_org: Organization,
 ) -> None:
     """
     Regression test (b & c):
@@ -368,6 +379,7 @@ async def test_team_leaves_status_filtering_approved_and_pending(
         access_level=2,
         employee_code="EMP-2003",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(manager)
     await db_session.commit()
@@ -382,6 +394,7 @@ async def test_team_leaves_status_filtering_approved_and_pending(
         employee_code="EMP-2004",
         reports_to_id=manager.id,
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(report)
     await db_session.commit()
@@ -393,6 +406,7 @@ async def test_team_leaves_status_filtering_approved_and_pending(
         start_date=date(2027, 6, 1),
         end_date=date(2027, 6, 2),
         status=LeaveStatus.PENDING,
+        organization_id=test_org.id,
     )
     l_approved = LeaveRequest(
         employee_id=report.id,
@@ -400,6 +414,7 @@ async def test_team_leaves_status_filtering_approved_and_pending(
         start_date=date(2027, 7, 1),
         end_date=date(2027, 7, 2),
         status=LeaveStatus.APPROVED,
+        organization_id=test_org.id,
     )
     l_rejected = LeaveRequest(
         employee_id=report.id,
@@ -407,6 +422,7 @@ async def test_team_leaves_status_filtering_approved_and_pending(
         start_date=date(2027, 8, 1),
         end_date=date(2027, 8, 2),
         status=LeaveStatus.REJECTED,
+        organization_id=test_org.id,
     )
     db_session.add_all([l_pending, l_approved, l_rejected])
     await db_session.commit()
@@ -436,6 +452,7 @@ async def test_team_leaves_deactivated_employee_excluded(
     client: AsyncClient,
     db_session: AsyncSession,
     admin_headers: dict[str, str],
+    test_org: Organization,
 ) -> None:
     """
     Regression test (d):
@@ -450,6 +467,7 @@ async def test_team_leaves_deactivated_employee_excluded(
         access_level=2,
         employee_code="EMP-2005",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(manager)
     await db_session.commit()
@@ -465,6 +483,7 @@ async def test_team_leaves_deactivated_employee_excluded(
         reports_to_id=manager.id,
         is_active=True,
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(report)
     await db_session.commit()
@@ -476,6 +495,7 @@ async def test_team_leaves_deactivated_employee_excluded(
         start_date=date(2027, 9, 1),
         end_date=date(2027, 9, 3),
         status=LeaveStatus.PENDING,
+        organization_id=test_org.id,
     )
     db_session.add(leave)
     await db_session.commit()
@@ -500,6 +520,7 @@ async def test_team_leaves_deactivated_employee_excluded(
     res_pending = await client.get("/leaves/team?status=PENDING", headers=mgr_headers)
     assert res_pending.status_code == status.HTTP_200_OK
     assert res_pending.json() == []
+
 
 
 

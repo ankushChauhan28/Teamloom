@@ -23,9 +23,11 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models.leave import LeaveRequest  # noqa: F401
+from app.models.organization import Organization, OrgStatus  # noqa: F401
 from app.models.revoked_token import RevokedToken  # noqa: F401
 from app.models.task import Task  # noqa: F401
 from app.models.user import User, UserRole
+
 
 # ---------------------------------------------------------------------------
 # Test Database Configuration & Safety Guards
@@ -282,8 +284,24 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+async def test_org(db_session: AsyncSession) -> Organization:
+    """
+    Fixture creating the default test organization in the test database.
+    """
+    org = Organization(
+        name="Internal / free forever",
+        status=OrgStatus.ACTIVE.value,
+        is_internal=True,
+    )
+    db_session.add(org)
+    await db_session.commit()
+    await db_session.refresh(org)
+    return org
+
+
 @pytest.fixture
-async def admin_user(db_session: AsyncSession) -> User:
+async def admin_user(db_session: AsyncSession, test_org: Organization) -> User:
     """
     Fixture creating a test ADMIN user asynchronously in the test database.
     """
@@ -295,6 +313,7 @@ async def admin_user(db_session: AsyncSession) -> User:
         access_level=1,
         employee_code="EMP-0001",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(admin)
     await db_session.commit()
@@ -303,7 +322,7 @@ async def admin_user(db_session: AsyncSession) -> User:
 
 
 @pytest.fixture
-async def employee_user(db_session: AsyncSession) -> User:
+async def employee_user(db_session: AsyncSession, test_org: Organization) -> User:
     """
     Fixture creating a test EMPLOYEE user asynchronously in the test database.
     """
@@ -315,11 +334,13 @@ async def employee_user(db_session: AsyncSession) -> User:
         access_level=3,
         employee_code="EMP-0002",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(employee)
     await db_session.commit()
     await db_session.refresh(employee)
     return employee
+
 
 
 @pytest.fixture

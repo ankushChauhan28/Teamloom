@@ -72,7 +72,7 @@ Teamloom/
 ├── app/                  # FastAPI backend application
 │   ├── core/             # Configuration, security, rate limiting & exception handlers
 │   ├── db/               # Async database engine & session dependencies
-│   ├── models/           # SQLAlchemy 2.0 ORM models (User, Task, LeaveRequest)
+│   ├── models/           # SQLAlchemy 2.0 ORM models (Organization, User, Task, LeaveRequest, RevokedToken)
 │   ├── routes/           # REST API endpoints (auth, users, tasks, leaves, analytics)
 │   ├── schemas/          # Pydantic request & response validation schemas
 │   └── services/         # Domain business logic & server-side SQL queries
@@ -186,6 +186,6 @@ pytest
 pytest --cov=app --cov-report=term-missing
 ```
 
-- **Pass Rate**: 100% (**151 passing tests**)
+- **Pass Rate**: 100% (**158 passing tests**)
 - **Database Engine**: PostgreSQL 16 (Docker) with Alembic migration parity
-- **Statement Coverage**: **86% overall**
+- **Statement Coverage**: **87% overall**

@@ -11,9 +11,11 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
+from app.models.organization import Organization
 from app.models.user import User, UserRole
 from app.schemas.user import EmployeeCreate
 from app.services.user_service import create_employee
+
 
 
 @pytest.mark.asyncio
@@ -316,6 +318,7 @@ async def test_employee_creation_sequence_desync_skips_collisions(
     client: AsyncClient,
     admin_headers: dict[str, str],
     db_session: AsyncSession,
+    test_org: Organization,
 ) -> None:
     """
     Simulate exact sequence desync scenario:
@@ -331,6 +334,7 @@ async def test_employee_creation_sequence_desync_skips_collisions(
         access_level=3,
         employee_code="EMP-1001",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     user2 = User(
         full_name="Pre-existing 2",
@@ -340,6 +344,7 @@ async def test_employee_creation_sequence_desync_skips_collisions(
         access_level=3,
         employee_code="EMP-1002",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add_all([user1, user2])
     await db_session.commit()
@@ -364,6 +369,7 @@ async def test_employee_creation_desync_exhausts_retries_returns_clean_app_excep
     client: AsyncClient,
     admin_headers: dict[str, str],
     db_session: AsyncSession,
+    test_org: Organization,
 ) -> None:
     """
     When all 10 retry attempts collide due to severe sequence desync, create_employee()
@@ -378,6 +384,7 @@ async def test_employee_creation_desync_exhausts_retries_returns_clean_app_excep
         access_level=3,
         employee_code="EMP-9999",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(colliding_user)
     await db_session.commit()
@@ -400,6 +407,7 @@ async def test_employee_creation_desync_exhausts_retries_returns_clean_app_excep
 @pytest.mark.asyncio
 async def test_create_employee_service_raises_app_exception_on_exhausted_retries(
     db_session: AsyncSession,
+    test_org: Organization,
 ) -> None:
     """
     Unit test directly on create_employee():
@@ -413,6 +421,7 @@ async def test_create_employee_service_raises_app_exception_on_exhausted_retries
         access_level=3,
         employee_code="EMP-8888",
         must_change_password=False,
+        organization_id=test_org.id,
     )
     db_session.add(colliding_user)
     await db_session.commit()
@@ -431,5 +440,6 @@ async def test_create_employee_service_raises_app_exception_on_exhausted_retries
 
         assert exc_info.value.status_code == 500
         assert "Failed to generate a unique employee code" in exc_info.value.message
+
 
 

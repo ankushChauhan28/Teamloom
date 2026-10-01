@@ -34,9 +34,16 @@ class Task(Base):
     __mapper_args__ = {"version_id_col": version}
     assigned_to = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_by = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships
+    organization = relationship("Organization", back_populates="tasks")
     assigned_employee = relationship(
         "User", foreign_keys=[assigned_to], back_populates="assigned_tasks"
     )
@@ -44,3 +51,4 @@ class Task(Base):
         "User", foreign_keys=[assigned_to], viewonly=True
     )
     creator = relationship("User", foreign_keys=[created_by], back_populates="created_tasks")
+

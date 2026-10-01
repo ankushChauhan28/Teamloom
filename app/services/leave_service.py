@@ -12,7 +12,10 @@ from app.schemas.leave import LeaveCreate, LeaveUpdateStatus
 
 
 async def create_leave_request(
-    db: AsyncSession, leave_in: LeaveCreate, employee_id: int
+    db: AsyncSession,
+    leave_in: LeaveCreate,
+    employee_id: int,
+    organization_id: int | None = None,
 ) -> LeaveRequest:
     """
     Submits a leave request. Employees create their own.
@@ -35,17 +38,23 @@ async def create_leave_request(
                 detail=f"Leave request dates overlap with existing request (ID: {existing.id}). Please choose different dates."
             )
 
+    if organization_id is None:
+        user_res = await db.execute(select(User.organization_id).where(User.id == employee_id))
+        organization_id = user_res.scalar_one_or_none()
+
     db_leave = LeaveRequest(
         employee_id=employee_id,
         reason=leave_in.reason,
         start_date=leave_in.start_date,
         end_date=leave_in.end_date,
         status=LeaveStatus.PENDING,
+        organization_id=organization_id,
     )
     db.add(db_leave)
     await db.commit()
     await db.refresh(db_leave)
     return db_leave
+
 
 
 async def get_leaves(
