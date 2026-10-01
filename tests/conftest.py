@@ -359,3 +359,135 @@ async def employee_headers(employee_user: User) -> dict[str, str]:
     """
     token = create_access_token(email=employee_user.email, role=employee_user.role.value)
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+async def test_org_b(db_session: AsyncSession) -> Organization:
+    """
+    Fixture creating a second isolated test organization (Org B).
+    """
+    org = Organization(
+        name="Acme Corp Organization B",
+        status=OrgStatus.ACTIVE.value,
+        is_internal=False,
+    )
+    db_session.add(org)
+    await db_session.commit()
+    await db_session.refresh(org)
+    return org
+
+
+@pytest.fixture
+async def admin_user_b(db_session: AsyncSession, test_org_b: Organization) -> User:
+    """
+    Fixture creating an ADMIN user for Org B.
+    """
+    admin = User(
+        full_name="Org B Admin",
+        email="admin.orgb@example.com",
+        hashed_password=hash_password("adminorgb123"),
+        role=UserRole.ADMIN,
+        access_level=1,
+        employee_code="EMP-0010",
+        must_change_password=False,
+        organization_id=test_org_b.id,
+    )
+    db_session.add(admin)
+    await db_session.commit()
+    await db_session.refresh(admin)
+    return admin
+
+
+@pytest.fixture
+async def employee_user_b(db_session: AsyncSession, test_org_b: Organization) -> User:
+    """
+    Fixture creating an EMPLOYEE user for Org B.
+    """
+    emp = User(
+        full_name="Org B Employee",
+        email="employee.orgb@example.com",
+        hashed_password=hash_password("emporgb123"),
+        role=UserRole.EMPLOYEE,
+        access_level=3,
+        employee_code="EMP-0011",
+        must_change_password=False,
+        organization_id=test_org_b.id,
+    )
+    db_session.add(emp)
+    await db_session.commit()
+    await db_session.refresh(emp)
+    return emp
+
+
+@pytest.fixture
+async def admin_headers_b(admin_user_b: User) -> dict[str, str]:
+    """
+    Authorization headers for Org B Admin.
+    """
+    token = create_access_token(email=admin_user_b.email, role=admin_user_b.role.value)
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+async def employee_headers_b(employee_user_b: User) -> dict[str, str]:
+    """
+    Authorization headers for Org B Employee.
+    """
+    token = create_access_token(email=employee_user_b.email, role=employee_user_b.role.value)
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+async def task_b(
+    db_session: AsyncSession,
+    test_org_b: Organization,
+    employee_user_b: User,
+    admin_user_b: User,
+) -> Task:
+    """
+    Fixture creating a Task belonging to Org B.
+    """
+    from datetime import UTC, datetime, timedelta
+    from app.models.task import TaskPriority, TaskStatus
+
+    task = Task(
+        title="Org B Task",
+        description="Task for org B",
+        priority=TaskPriority.HIGH,
+        status=TaskStatus.PENDING,
+        due_datetime=datetime.now(UTC) + timedelta(days=2),
+        assigned_to=employee_user_b.id,
+        created_by=admin_user_b.id,
+        organization_id=test_org_b.id,
+    )
+    db_session.add(task)
+    await db_session.commit()
+    await db_session.refresh(task)
+    return task
+
+
+@pytest.fixture
+async def leave_b(
+    db_session: AsyncSession,
+    test_org_b: Organization,
+    employee_user_b: User,
+) -> LeaveRequest:
+    """
+    Fixture creating a LeaveRequest belonging to Org B.
+    """
+    from datetime import date, timedelta
+    from app.models.leave import LeaveStatus
+
+    leave = LeaveRequest(
+        employee_id=employee_user_b.id,
+        reason="Org B Vacation",
+        start_date=date.today() + timedelta(days=5),
+        end_date=date.today() + timedelta(days=7),
+        status=LeaveStatus.PENDING,
+        organization_id=test_org_b.id,
+    )
+    db_session.add(leave)
+    await db_session.commit()
+    await db_session.refresh(leave)
+    return leave
+

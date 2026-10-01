@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api } from '../lib/api';
+import { api, fetchAllEmployees } from '../lib/api';
 import { formatToDatetimeLocal } from '../lib/dateUtils';
 import { Modal } from './ui/Modal';
 import { Input } from './ui/Input';
@@ -39,8 +39,8 @@ export function TaskFormModal({ isOpen, onClose, onSuccess, editingTask = null, 
     const fetchEmployees = async () => {
       setIsLoadingEmployees(true);
       try {
-        const res = await api.get('/users/');
-        setEmployees(res.data);
+        const data = await fetchAllEmployees();
+        setEmployees(data);
       } catch (err) {
         console.error('Failed to fetch employee list:', err);
       } finally {

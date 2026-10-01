@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { api } from '../lib/api';
+import { api, fetchAllEmployees } from '../lib/api';
 import { Navbar } from '../components/layout/Navbar';
 import { UserMenu } from '../components/layout/UserMenu';
 import { Button } from '../components/ui/Button';
@@ -54,12 +54,12 @@ export function AdminTasksPage() {
     if (!isSilent) setIsLoading(true);
     setError('');
     try {
-      const [tasksRes, usersRes] = await Promise.all([
+      const [tasksRes, allEmployees] = await Promise.all([
         api.get('/tasks/?limit=100'),
-        api.get('/users/'),
+        fetchAllEmployees(),
       ]);
       setTasks(tasksRes.data);
-      setEmployees(usersRes.data);
+      setEmployees(allEmployees);
       setLastUpdated(new Date());
     } catch (err) {
       const msg = err.response?.data?.detail || 'Failed to load system tasks. Please try again.';

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { api } from '../lib/api';
+import { api, fetchAllEmployees } from '../lib/api';
 import { useAuthStore } from '../store/authStore';
 import { Navbar } from '../components/layout/Navbar';
 import { UserMenu } from '../components/layout/UserMenu';
@@ -223,13 +223,13 @@ export function AdminEmployeesPage() {
   const [notification, setNotification] = useLoggedState(null, 'AdminEmployeesPage.notification');
 
   const fetchEmployees = useCallback(async () => {
-    console.log('[AdminEmployeesPage] Initiating fetchEmployees() -> GET /users/');
+    console.log('[AdminEmployeesPage] Initiating fetchEmployees() -> fetchAllEmployees()');
     setIsLoading(true);
     setError('');
     try {
-      const res = await api.get('/users/');
-      console.log(`[AdminEmployeesPage] fetchEmployees() success -> Loaded ${res.data?.length} users:`, res.data.map(u => ({ id: u.id, name: u.full_name, active: u.is_active })));
-      setEmployees(res.data);
+      const data = await fetchAllEmployees();
+      console.log(`[AdminEmployeesPage] fetchEmployees() success -> Loaded ${data?.length} users:`, data.map(u => ({ id: u.id, name: u.full_name, active: u.is_active })));
+      setEmployees(data);
     } catch (err) {
       const msg =
         err.response?.data?.detail ||

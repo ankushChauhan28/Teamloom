@@ -19,7 +19,7 @@ async def create_task(
     current_user: User = Depends(require_password_change_cleared),
 ):
     """
-    Create a new task and assign it to an employee.
+    Create a new task and assign it to an employee in the same organization.
     Accessible by Tier 1 OR any user who has direct-report authority over the target employee.
     """
     return await task_service.create_task(db=db, task_in=task_in, creator=current_user)
@@ -27,6 +27,7 @@ async def create_task(
 
 @router.get("/team", response_model=list[TaskRead])
 async def list_team_tasks(
+    response: Response,
     status: TaskStatus | None = None,
     priority: TaskPriority | None = None,
     sort_by: str | None = None,
@@ -36,10 +37,10 @@ async def list_team_tasks(
     current_user: User = Depends(require_password_change_cleared),
 ):
     """
-    List tasks assigned to any of the current user's direct reports.
+    List tasks assigned to any of the current user's direct reports within their organization.
     Returns an empty list if the user has no direct reports.
     """
-    return await task_service.get_team_tasks(
+    tasks, total_count = await task_service.get_team_tasks(
         db=db,
         user=current_user,
         status=status,
@@ -47,11 +48,15 @@ async def list_team_tasks(
         sort_by=sort_by,
         skip=skip,
         limit=limit,
+        return_total=True,
     )
+    response.headers["X-Total-Count"] = str(total_count)
+    return tasks
 
 
 @router.get("/", response_model=list[TaskRead])
 async def list_tasks(
+    response: Response,
     status: TaskStatus | None = None,
     priority: TaskPriority | None = None,
     sort_by: str | None = None,
@@ -61,10 +66,10 @@ async def list_tasks(
     current_user: User = Depends(require_password_change_cleared),
 ):
     """
-    List tasks. Tier 1 sees all tasks; other tiers see only their assigned tasks.
+    List tasks. Tier 1 sees all tasks in their organization; other tiers see only their assigned tasks.
     Supports filtering by status and priority, sorting, and pagination.
     """
-    return await task_service.get_tasks(
+    tasks, total_count = await task_service.get_tasks(
         db=db,
         user=current_user,
         status=status,
@@ -72,7 +77,10 @@ async def list_tasks(
         sort_by=sort_by,
         skip=skip,
         limit=limit,
+        return_total=True,
     )
+    response.headers["X-Total-Count"] = str(total_count)
+    return tasks
 
 
 @router.get("/{id}", response_model=TaskRead)
@@ -82,7 +90,7 @@ async def get_task(
     current_user: User = Depends(require_password_change_cleared),
 ):
     """
-    Retrieve details of a single task. Non-tier-1 users can only view their own tasks.
+    Retrieve details of a single task scoped to organization. Non-tier-1 users can only view their own tasks.
     """
     return await task_service.get_task_by_id(db=db, task_id=id, user=current_user)
 
@@ -95,7 +103,7 @@ async def update_task(
     current_user: User = Depends(require_password_change_cleared),
 ):
     """
-    Update a task. Tier 1 can update any field.
+    Update a task scoped to organization. Tier 1 can update any field.
     Users with direct-report authority can update full metadata of direct reports' tasks.
     Associates can only update the status field of their assigned tasks.
     """
@@ -111,7 +119,7 @@ async def delete_task(
     current_admin: User = Depends(check_access_level_dependency(1)),
 ):
     """
-    Delete a task. Tier 1 only.
+    Delete a task scoped to organization. Tier 1 only.
     """
     await task_service.delete_task(db=db, task_id=id, user=current_admin)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

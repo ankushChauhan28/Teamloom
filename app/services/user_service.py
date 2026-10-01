@@ -17,7 +17,7 @@ from app.core.security import hash_password
 from app.models.organization import Organization
 from app.models.user import User, UserRole
 from app.schemas.user import EmployeeCreate, UserUpdate
-
+from app.services.common import get_scoped_or_404
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +40,53 @@ async def update_user_profile(db: AsyncSession, user: User, user_update: UserUpd
     return user
 
 
-async def get_employees(db: AsyncSession) -> list[User]:
+async def get_employees(
+    db: AsyncSession,
+    organization_id: int | None = None,
+    skip: int = 0,
+    limit: int = 100,
+    return_total: bool = False,
+) -> list[User] | tuple[list[User], int]:
     """
-    Fetches all users with role EMPLOYEE. Admin scope.
+    Fetches all users with role EMPLOYEE scoped to the given organization. Admin scope.
     """
-    result = await db.execute(select(User).where(User.role == UserRole.EMPLOYEE))
+    capped_limit = min(max(1, limit), 100)
+    conditions = [User.role == UserRole.EMPLOYEE]
+    if organization_id is not None:
+        conditions.append(User.organization_id == organization_id)
+
+    if return_total:
+        stmt = (
+            select(User, func.count(User.id).over().label("total_count"))
+            .where(*conditions)
+            .order_by(User.id.asc())
+            .offset(skip)
+            .limit(capped_limit)
+        )
+    else:
+        stmt = (
+            select(User)
+            .where(*conditions)
+            .order_by(User.id.asc())
+            .offset(skip)
+            .limit(capped_limit)
+        )
+    result = await db.execute(stmt)
+
+    if return_total:
+        rows = result.all()
+        if rows:
+            employees = [row[0] for row in rows]
+            total_count = int(rows[0][1])
+        else:
+            employees = []
+            if skip == 0:
+                total_count = 0
+            else:
+                count_stmt = select(func.count(User.id)).where(*conditions)
+                total_count = (await db.execute(count_stmt)).scalar() or 0
+        return employees, total_count
+
     return list(result.scalars().all())
 
 
@@ -84,11 +126,11 @@ async def create_employee(
     """
     Creates a new employee account:
     - Verifies email uniqueness.
-    - Validates reports_to_id if provided.
+    - Resolves organization_id.
+    - Validates reports_to_id belongs to the same organization if provided.
     - Generates sequential employee_code (EMP-1001, etc) with retry loop for collision safety.
     - Generates temporary password via secrets module.
     - Hashes password and sets must_change_password = True.
-    - Sets organization_id (defaults to default internal organization if None).
     - Attempts to send welcome email via SMTP.
     - Returns tuple of (created_user, email_sent_bool).
     """
@@ -96,12 +138,6 @@ async def create_employee(
     existing_user = result.scalar_one_or_none()
     if existing_user:
         raise UserAlreadyExistsException("A user with this email address already exists.")
-
-    if employee_in.reports_to_id is not None:
-        mgr_res = await db.execute(select(User).where(User.id == employee_in.reports_to_id))
-        proposed_mgr = mgr_res.scalar_one_or_none()
-        if not proposed_mgr:
-            raise ResourceNotFoundException("Reports-to supervisor user not found.")
 
     if organization_id is None:
         org_res = await db.execute(
@@ -121,6 +157,15 @@ async def create_employee(
             await db.flush()
             org_id = default_org.id
         organization_id = org_id
+
+    if employee_in.reports_to_id is not None:
+        await get_scoped_or_404(
+            db=db,
+            model=User,
+            id_val=employee_in.reports_to_id,
+            organization_id=organization_id,
+            error_msg="Reports-to supervisor user not found.",
+        )
 
     temp_password = _generate_temp_password()
     hashed_pwd = hash_password(temp_password)
@@ -171,15 +216,20 @@ async def create_employee(
     return new_user, email_sent
 
 
-async def reset_employee_temp_password(db: AsyncSession, target_user_id: int) -> tuple[User, bool]:
+async def reset_employee_temp_password(
+    db: AsyncSession, target_user_id: int, organization_id: int | None = None
+) -> tuple[User, bool]:
     """
     Resets an employee's password to a new temporary password and sets must_change_password = True.
-    Sends new credentials via email. Never returns plaintext password.
+    Sends new credentials via email. Never returns plaintext password. Scoped by organization_id.
     """
-    result = await db.execute(select(User).where(User.id == target_user_id))
-    user = result.scalar_one_or_none()
-    if not user:
-        raise ResourceNotFoundException("User not found.")
+    user = await get_scoped_or_404(
+        db=db,
+        model=User,
+        id_val=target_user_id,
+        organization_id=organization_id,
+        error_msg="User not found.",
+    )
 
     temp_password = _generate_temp_password()
     user.hashed_password = hash_password(temp_password)
@@ -198,20 +248,26 @@ async def reset_employee_temp_password(db: AsyncSession, target_user_id: int) ->
 
 
 async def set_user_reports_to(
-    db: AsyncSession, target_user_id: int, reports_to_id: int | None
+    db: AsyncSession,
+    target_user_id: int,
+    reports_to_id: int | None,
+    organization_id: int | None = None,
 ) -> User:
     """
-    Sets or updates the reports_to_id of target_user_id.
+    Sets or updates the reports_to_id of target_user_id within the organization.
     Enforces validation rules:
-    1. Target user exists.
-    2. Proposed supervisor exists (if reports_to_id is not None).
+    1. Target user exists in the organization.
+    2. Proposed supervisor exists in the same organization (if reports_to_id is not None).
     3. User cannot report to themselves (reports_to_id != target_user_id).
-    4. Circular reporting chain detection (walking up the chain from proposed supervisor).
+    4. Circular reporting chain detection (walking up the chain from proposed supervisor within same org).
     """
-    result = await db.execute(select(User).where(User.id == target_user_id))
-    target_user = result.scalar_one_or_none()
-    if not target_user:
-        raise ResourceNotFoundException("User not found.")
+    target_user = await get_scoped_or_404(
+        db=db,
+        model=User,
+        id_val=target_user_id,
+        organization_id=organization_id,
+        error_msg="User not found.",
+    )
 
     if reports_to_id is None:
         target_user.reports_to_id = None
@@ -222,10 +278,14 @@ async def set_user_reports_to(
     if reports_to_id == target_user_id:
         raise BadRequestException("A user cannot report to themselves.")
 
-    result = await db.execute(select(User).where(User.id == reports_to_id))
-    proposed_supervisor = result.scalar_one_or_none()
-    if not proposed_supervisor:
-        raise ResourceNotFoundException("Reports-to supervisor user not found.")
+    org_to_check = organization_id if organization_id is not None else target_user.organization_id
+    proposed_supervisor = await get_scoped_or_404(
+        db=db,
+        model=User,
+        id_val=reports_to_id,
+        organization_id=org_to_check,
+        error_msg="Reports-to supervisor user not found.",
+    )
 
     # Cycle detection: walk up the chain starting from proposed_supervisor
     curr_supervisor = proposed_supervisor
@@ -238,7 +298,12 @@ async def set_user_reports_to(
             break
         if curr_supervisor.reports_to_id == target_user_id:
             raise BadRequestException("Circular reporting hierarchy is not allowed.")
-        res = await db.execute(select(User).where(User.id == curr_supervisor.reports_to_id))
+        res = await db.execute(
+            select(User).where(
+                User.id == curr_supervisor.reports_to_id,
+                User.organization_id == target_user.organization_id,
+            )
+        )
         curr_supervisor = res.scalar_one_or_none()
 
     target_user.reports_to_id = reports_to_id
@@ -247,44 +312,98 @@ async def set_user_reports_to(
     return target_user
 
 
-async def get_user_direct_reports(db: AsyncSession, user_id: int) -> list[User]:
+async def get_user_direct_reports(
+    db: AsyncSession,
+    user_id: int,
+    organization_id: int | None = None,
+    skip: int = 0,
+    limit: int = 100,
+    return_total: bool = False,
+) -> list[User] | tuple[list[User], int]:
     """
-    Retrieves all active users where reports_to_id == user_id.
+    Retrieves all active users where reports_to_id == user_id within the organization.
     """
-    result = await db.execute(
-        select(User)
-        .where(User.reports_to_id == user_id, User.is_active.is_(True))
-        .order_by(User.full_name.asc())
-    )
+    capped_limit = min(max(1, limit), 100)
+    conditions = [User.reports_to_id == user_id, User.is_active.is_(True)]
+    if organization_id is not None:
+        conditions.append(User.organization_id == organization_id)
+
+    if return_total:
+        stmt = (
+            select(User, func.count(User.id).over().label("total_count"))
+            .where(*conditions)
+            .order_by(User.full_name.asc(), User.id.asc())
+            .offset(skip)
+            .limit(capped_limit)
+        )
+    else:
+        stmt = (
+            select(User)
+            .where(*conditions)
+            .order_by(User.full_name.asc(), User.id.asc())
+            .offset(skip)
+            .limit(capped_limit)
+        )
+    result = await db.execute(stmt)
+
+    if return_total:
+        rows = result.all()
+        if rows:
+            reports = [row[0] for row in rows]
+            total_count = int(rows[0][1])
+        else:
+            reports = []
+            if skip == 0:
+                total_count = 0
+            else:
+                count_stmt = select(func.count(User.id)).where(*conditions)
+                total_count = (await db.execute(count_stmt)).scalar() or 0
+        return reports, total_count
+
     return list(result.scalars().all())
 
 
-async def deactivate_user(db: AsyncSession, current_admin_id: int, target_user_id: int) -> User:
+async def deactivate_user(
+    db: AsyncSession,
+    current_admin_id: int,
+    target_user_id: int,
+    organization_id: int | None = None,
+) -> User:
     """
     Deactivates a user account (is_active = False).
     Admin cannot deactivate their own account.
-    Clears reports_to_id on any direct reports managed by the deactivated user.
+    Clears reports_to_id on any direct reports managed by the deactivated user within the same org.
     """
     if current_admin_id == target_user_id:
         raise BadRequestException("An admin cannot deactivate their own account.")
 
-    result = await db.execute(select(User).where(User.id == target_user_id))
-    target_user = result.scalar_one_or_none()
-    if not target_user:
-        raise ResourceNotFoundException("User not found.")
+    target_user = await get_scoped_or_404(
+        db=db,
+        model=User,
+        id_val=target_user_id,
+        organization_id=organization_id,
+        error_msg="User not found.",
+    )
 
     target_user.is_active = False
 
-    # Check if this user has active direct reports
-    count_stmt = select(func.count()).select_from(User).where(
+    # Check if this user has active direct reports within the same org
+    count_conditions = [
         User.reports_to_id == target_user_id,
         User.is_active.is_(True),
-    )
+    ]
+    if target_user.organization_id is not None:
+        count_conditions.append(User.organization_id == target_user.organization_id)
+
+    count_stmt = select(func.count()).select_from(User).where(*count_conditions)
     direct_reports_count = (await db.execute(count_stmt)).scalar() or 0
 
     if direct_reports_count > 0:
+        update_conditions = [User.reports_to_id == target_user_id]
+        if target_user.organization_id is not None:
+            update_conditions.append(User.organization_id == target_user.organization_id)
         await db.execute(
-            update(User).where(User.reports_to_id == target_user_id).values(reports_to_id=None)
+            update(User).where(*update_conditions).values(reports_to_id=None)
         )
         logger.info(
             f"Cleared reports_to_id for {direct_reports_count} direct reports of deactivated supervisor (ID: {target_user_id})"
@@ -295,17 +414,21 @@ async def deactivate_user(db: AsyncSession, current_admin_id: int, target_user_i
     return target_user
 
 
-async def reactivate_user(db: AsyncSession, target_user_id: int) -> User:
+async def reactivate_user(
+    db: AsyncSession, target_user_id: int, organization_id: int | None = None
+) -> User:
     """
-    Reactivates a user account (is_active = True).
+    Reactivates a user account (is_active = True). Scoped by organization_id.
     """
-    result = await db.execute(select(User).where(User.id == target_user_id))
-    target_user = result.scalar_one_or_none()
-    if not target_user:
-        raise ResourceNotFoundException("User not found.")
+    target_user = await get_scoped_or_404(
+        db=db,
+        model=User,
+        id_val=target_user_id,
+        organization_id=organization_id,
+        error_msg="User not found.",
+    )
 
     target_user.is_active = True
     await db.commit()
     await db.refresh(target_user)
     return target_user
-

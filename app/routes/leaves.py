@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import require_password_change_cleared
@@ -29,9 +29,9 @@ async def create_leave(
     )
 
 
-
 @router.get("/", response_model=list[LeaveRead])
 async def list_leaves(
+    response: Response,
     status: LeaveStatus | None = None,
     sort_by: str | None = None,
     skip: int = 0,
@@ -40,21 +40,25 @@ async def list_leaves(
     current_user: User = Depends(require_password_change_cleared),
 ):
     """
-    List leave requests. Admin sees all requests; Employees see only their own.
+    List leave requests. Admin sees all requests in their org; Employees see only their own.
     Supports filtering by status, dynamic sorting, and pagination.
     """
-    return await leave_service.get_leaves(
+    leaves, total_count = await leave_service.get_leaves(
         db=db,
         user=current_user,
         status=status,
         sort_by=sort_by,
         skip=skip,
         limit=limit,
+        return_total=True,
     )
+    response.headers["X-Total-Count"] = str(total_count)
+    return leaves
 
 
 @router.get("/team", response_model=list[LeaveRead])
 async def list_team_leaves(
+    response: Response,
     status: LeaveStatus | None = None,
     sort_by: str | None = None,
     skip: int = 0,
@@ -63,17 +67,20 @@ async def list_team_leaves(
     current_user: User = Depends(require_password_change_cleared),
 ):
     """
-    List leave requests submitted by any of the current user's direct reports.
+    List leave requests submitted by any of the current user's direct reports in the same organization.
     Returns all statuses if status is None. Returns an empty list if the user has no direct reports.
     """
-    return await leave_service.get_team_leave_requests(
+    leaves, total_count = await leave_service.get_team_leave_requests(
         db=db,
         user=current_user,
         status=status,
         sort_by=sort_by,
         skip=skip,
         limit=limit,
+        return_total=True,
     )
+    response.headers["X-Total-Count"] = str(total_count)
+    return leaves
 
 
 @router.patch("/{id}", response_model=LeaveRead)
@@ -84,7 +91,7 @@ async def review_leave(
     current_admin: User = Depends(check_access_level_dependency(1)),
 ):
     """
-    Approve or reject a leave request.
+    Approve or reject a leave request scoped to admin's organization.
     Accessible by Tier 1 Admin only.
     Sets the status and updates the reviewer ID to the current user's ID.
     """

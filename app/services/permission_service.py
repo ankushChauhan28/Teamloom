@@ -44,12 +44,17 @@ def can_manage_specific_user(
     """
     Evaluates whether actor_user has authority to manage target_user for task assignment.
     Rule:
-    1. Tier 1 (Admin) can assign tasks to anyone.
+    1. Must belong to the same organization.
     2. Self-management block: actor cannot assign tasks to themselves.
-    3. Direct supervisor check: allowed ONLY if target_user.reports_to_id == actor.id
+    3. Tier 1 (Admin) can assign tasks to anyone within their organization.
+    4. Direct supervisor check: allowed ONLY if target_user.reports_to_id == actor.id
        (or target_user is in cached direct report IDs), regardless of numeric tier.
     """
     if not actor_user or not target_user:
+        return False
+
+    # Cross-organization management is forbidden
+    if getattr(actor_user, "organization_id", None) != getattr(target_user, "organization_id", None):
         return False
 
     # Prevent managing self via supervisor path
@@ -100,12 +105,13 @@ def check_access_level_dependency(
 
 async def populate_user_effective_cache(user: User, db: AsyncSession) -> Any:
     """
-    Builds UserRead with cached direct reports IDs and access level.
+    Builds UserRead with cached direct reports IDs and access level, scoped to user's organization.
     """
     from app.schemas.user import UserRead
 
     report_ids_stmt = select(User.id).where(
         User.reports_to_id == user.id,
+        User.organization_id == user.organization_id,
         User.is_active.is_(True),
     )
     res = await db.execute(report_ids_stmt)
@@ -115,5 +121,3 @@ async def populate_user_effective_cache(user: User, db: AsyncSession) -> Any:
     user_read.effective_tier = get_user_access_level(user)
     user_read.direct_reports_ids = report_ids
     return user_read
-
-

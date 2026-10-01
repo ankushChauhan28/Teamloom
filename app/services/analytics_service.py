@@ -11,6 +11,7 @@ from app.core.exceptions import (
 from app.models.task import Task, TaskStatus
 from app.models.user import User, UserRole
 from app.schemas.analytics import PerformanceStats, TrailItem
+from app.services.common import get_scoped_or_404
 
 
 def _classify_task_state(
@@ -61,7 +62,7 @@ async def get_performance_analytics(
 ) -> PerformanceStats:
     """
     Computes performance analytics (on-time rate, categorized counts, milestone trail)
-    using server-side SQL conditional aggregations.
+    using server-side SQL conditional aggregations, scoped strictly by organization_id.
 
     Enforces authorization and scoping:
     - User without direct reports: Sees only self. Passing non-matching employee_id -> 403.
@@ -70,14 +71,18 @@ async def get_performance_analytics(
         - With employee_id == user.id -> user's personal stats (scope="self").
         - With employee_id of direct report -> individual report's stats (scope="employee").
         - With employee_id of non-report OR non-existent employee -> 403 Forbidden (identical status & body to prevent ID enumeration).
-    - ADMIN: Without employee_id -> org-wide (scope="org"). With employee_id -> individual employee's stats (scope="employee", 404 if user not found).
+    - ADMIN: Without employee_id -> org-wide (scope="org"). With employee_id -> individual employee's stats (scope="employee", 404 if user not found in organization).
     """
     # Enforce hard cap on trail_limit (1 <= trail_limit <= 50)
     capped_trail_limit = max(1, min(trail_limit, 50))
     now = datetime.now(UTC)
 
-    # Check for direct reports
-    reports_stmt = select(User.id).where(User.reports_to_id == user.id)
+    # Check for direct reports within user's organization
+    reports_stmt = select(User.id).where(
+        User.reports_to_id == user.id,
+        User.organization_id == user.organization_id,
+        User.is_active.is_(True),
+    )
     reports_res = await db.execute(reports_stmt)
     report_ids = list(reports_res.scalars().all())
     has_reports = len(report_ids) > 0
@@ -117,12 +122,15 @@ async def get_performance_analytics(
             resolved_scope = "org"
             filter_stmt = None
         else:
-            emp_res = await db.execute(select(User).where(User.id == employee_id))
-            target_emp = emp_res.scalar_one_or_none()
-            if not target_emp:
-                raise ResourceNotFoundException(f"User with ID {employee_id} not found.")
+            target_emp = await get_scoped_or_404(
+                db=db,
+                model=User,
+                id_val=employee_id,
+                organization_id=user.organization_id,
+                error_msg=f"User with ID {employee_id} not found.",
+            )
             resolved_scope = "employee"
-            target_employee_id = employee_id
+            target_employee_id = target_emp.id
             filter_stmt = Task.assigned_to == employee_id
 
     # SQL-side conditional aggregations (must mirror _classify_task_state)
@@ -155,6 +163,10 @@ async def get_performance_analytics(
         else_=0,
     )
 
+    base_conditions = [Task.due_datetime.is_not(None), Task.organization_id == user.organization_id]
+    if filter_stmt is not None:
+        base_conditions.append(filter_stmt)
+
     # Defensive guard: exclude legacy/corrupted rows with NULL due_datetime from aggregation
     stats_stmt = select(
         func.count(Task.id).label("total_tasks"),
@@ -162,10 +174,7 @@ async def get_performance_analytics(
         func.coalesce(func.sum(late_case), 0).label("late_count"),
         func.coalesce(func.sum(overdue_case), 0).label("overdue_count"),
         func.coalesce(func.sum(pending_case), 0).label("pending_count"),
-    ).where(Task.due_datetime.is_not(None))
-
-    if filter_stmt is not None:
-        stats_stmt = stats_stmt.where(filter_stmt)
+    ).where(*base_conditions)
 
     result = await db.execute(stats_stmt)
     row = result.one()
@@ -184,11 +193,13 @@ async def get_performance_analytics(
     else:
         completion_rate = 0.0
 
-    # Fetch milestone trail ordered by Task.due_datetime desc (most recent upcoming and completed deadlines first)
-    trail_stmt = select(Task).where(Task.due_datetime.is_not(None))
-    if filter_stmt is not None:
-        trail_stmt = trail_stmt.where(filter_stmt)
-    trail_stmt = trail_stmt.order_by(Task.due_datetime.desc()).limit(capped_trail_limit)
+    # Fetch milestone trail ordered by Task.due_datetime desc
+    trail_stmt = (
+        select(Task)
+        .where(*base_conditions)
+        .order_by(Task.due_datetime.desc(), Task.id.desc())
+        .limit(capped_trail_limit)
+    )
 
     trail_res = await db.execute(trail_stmt)
     trail_tasks = list(trail_res.scalars().all())
