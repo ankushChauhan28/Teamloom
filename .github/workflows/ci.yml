@@ -10,6 +10,13 @@ jobs:
   backend-tests:
     runs-on: ubuntu-latest
 
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/employee_task_db
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/employee_task_test_db
+      JWT_SECRET_KEY: ci_test_jwt_secret_key_long_random_value_for_github_actions_12345
+      JWT_REFRESH_SECRET_KEY: ci_test_jwt_refresh_secret_key_long_random_value_for_github_actions_12345
+      RATE_LIMITER_BACKEND: memory
+
     services:
       postgres:
         image: postgres:16-alpine
@@ -55,16 +62,9 @@ jobs:
           "
 
       - name: Verify CLI Migrations on Application DB
-        env:
-          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/employee_task_db
         run: |
           alembic upgrade head
 
       - name: Run Pytest Test Suite on Isolated Test DB
-        env:
-          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/employee_task_db
-          TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/employee_task_test_db
-          JWT_SECRET_KEY: test_jwt_secret_key_long_random_value_for_ci_runs_12345
-          JWT_REFRESH_SECRET_KEY: test_jwt_refresh_secret_key_long_random_value_ci_12345
         run: |
           pytest --cov=app --cov-report=term-missing
