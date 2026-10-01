@@ -41,6 +41,19 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
+      - name: Create Application Database in CI
+        run: |
+          python -c "
+          import asyncio, asyncpg
+          async def init():
+              conn = await asyncpg.connect('postgresql://postgres:postgres@localhost:5432/postgres')
+              exists = await conn.fetchval(\"SELECT 1 FROM pg_database WHERE datname = 'employee_task_db'\")
+              if not exists:
+                  await conn.execute('CREATE DATABASE employee_task_db;')
+              await conn.close()
+          asyncio.run(init())
+          "
+
       - name: Verify CLI Migrations on Application DB
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/employee_task_db
