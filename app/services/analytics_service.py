@@ -64,10 +64,10 @@ async def get_performance_analytics(
     using server-side SQL conditional aggregations.
 
     Enforces authorization and scoping:
-    - EMPLOYEE (no reports): Sees only self. Passing non-matching employee_id -> 403.
-    - Manager (has reports):
+    - User without direct reports: Sees only self. Passing non-matching employee_id -> 403.
+    - User with direct reports:
         - Without employee_id -> team aggregate across direct reports (scope="team").
-        - With employee_id == user.id -> manager's personal stats (scope="self").
+        - With employee_id == user.id -> user's personal stats (scope="self").
         - With employee_id of direct report -> individual report's stats (scope="employee").
         - With employee_id of non-report OR non-existent employee -> 403 Forbidden (identical status & body to prevent ID enumeration).
     - ADMIN: Without employee_id -> org-wide (scope="org"). With employee_id -> individual employee's stats (scope="employee", 404 if user not found).

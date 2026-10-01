@@ -3,7 +3,7 @@ import { Navigate, Outlet } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
 import { Spinner } from '../ui/Spinner';
 
-export function ManagerRoute({ children }) {
+export function DirectReportsRoute({ children }) {
   const { user, isAuthenticated, isLoading, directReports } = useAuthStore();
 
   if (isLoading) {
@@ -22,14 +22,14 @@ export function ManagerRoute({ children }) {
     return <Navigate to="/change-password" replace />;
   }
 
-  // Allow if Tier 2 or below, OR has direct reports
-  const isManager = user?.access_level <= 2 || (directReports || []).length > 0;
+  // Allow only non-admin users with active direct reports
+  const hasDirectReports = user?.role !== 'ADMIN' && (directReports || []).length > 0;
 
-  if (!isManager) {
+  if (!hasDirectReports) {
     return <Navigate to="/dashboard" replace />;
   }
 
   return children ? children : <Outlet />;
 }
 
-export default ManagerRoute;
+export default DirectReportsRoute;

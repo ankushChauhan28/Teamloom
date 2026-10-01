@@ -4,13 +4,14 @@ import { useAuthStore } from './store/authStore';
 import { ProtectedRoute } from './components/guards/ProtectedRoute';
 import { PasswordChangeRoute } from './components/guards/PasswordChangeRoute';
 import { AdminRoute } from './components/guards/AdminRoute';
-import { ManagerRoute } from './components/guards/ManagerRoute';
+import { DirectReportsRoute } from './components/guards/DirectReportsRoute';
 import { LoginPage } from './pages/LoginPage';
 import { ChangePasswordPage } from './pages/ChangePasswordPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { AdminTasksPage } from './pages/AdminTasksPage';
 import { AdminLeavesPage } from './pages/AdminLeavesPage';
 import { AdminEmployeesPage } from './pages/AdminEmployeesPage';
+import { AdminPerformancePage } from './pages/AdminPerformancePage';
 import { LeavesPage } from './pages/LeavesPage';
 import { MyTeamPage } from './pages/MyTeamPage';
 import { MyPerformancePage } from './pages/MyPerformancePage';
@@ -89,13 +90,13 @@ export function App() {
           }
         />
 
-        {/* Manager / Team Lead Portal Route */}
+        {/* Direct-report authority guarded route */}
         <Route
           path="/my-team"
           element={
-            <ManagerRoute>
+            <DirectReportsRoute>
               <MyTeamPage />
-            </ManagerRoute>
+            </DirectReportsRoute>
           }
         />
 
@@ -125,6 +126,16 @@ export function App() {
           element={
             <AdminRoute>
               <AdminEmployeesPage />
+            </AdminRoute>
+          }
+        />
+
+        {/* Admin Performance Analytics Route */}
+        <Route
+          path="/admin/performance"
+          element={
+            <AdminRoute>
+              <AdminPerformancePage />
             </AdminRoute>
           }
         />

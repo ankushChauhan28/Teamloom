@@ -20,7 +20,7 @@ async def create_task(
 ):
     """
     Create a new task and assign it to an employee.
-    Accessible by Tier 1 OR any user who is the direct manager of the target employee.
+    Accessible by Tier 1 OR any user who has direct-report authority over the target employee.
     """
     return await task_service.create_task(db=db, task_in=task_in, creator=current_user)
 
@@ -96,7 +96,7 @@ async def update_task(
 ):
     """
     Update a task. Tier 1 can update any field.
-    Managers can update full metadata of direct reports' tasks.
+    Users with direct-report authority can update full metadata of direct reports' tasks.
     Associates can only update the status field of their assigned tasks.
     """
     return await task_service.update_task(

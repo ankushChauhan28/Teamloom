@@ -9,13 +9,14 @@ export function Navbar({ rightSlot, title = 'Teamloom', className = '' }) {
   const location = useLocation()
 
   const hasReports = (directReports || []).length > 0
-  const isManager = user?.access_level <= 2 || hasReports
+  const hasDirectReports = user?.role !== 'ADMIN' && hasReports
   const homePath = user?.role === 'ADMIN' ? '/admin/tasks' : '/dashboard'
   const leavesPath = user?.role === 'ADMIN' ? '/admin/leaves' : '/leaves'
 
   const isTasksActive = location.pathname === homePath
   const isLeavesActive = location.pathname === leavesPath
   const isEmployeesActive = location.pathname === '/admin/employees'
+  const isPerformanceActive = location.pathname === '/admin/performance'
   const isMyPerfActive = location.pathname === '/my-performance'
   const isMyTeamActive = location.pathname === '/my-team'
 
@@ -73,7 +74,21 @@ export function Navbar({ rightSlot, title = 'Teamloom', className = '' }) {
               </Link>
             )}
 
-            {user?.access_level !== 1 && (
+            {user.role === 'ADMIN' && (
+              <Link
+                to="/admin/performance"
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                  isPerformanceActive
+                    ? 'bg-[var(--surface-2)] text-[var(--accent)] border border-[var(--border)]'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)]/50'
+                }`}
+              >
+                <Activity className="w-3.5 h-3.5" />
+                <span>Performance</span>
+              </Link>
+            )}
+
+            {user?.role !== 'ADMIN' && (
               <Link
                 to="/my-performance"
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
@@ -87,7 +102,7 @@ export function Navbar({ rightSlot, title = 'Teamloom', className = '' }) {
               </Link>
             )}
 
-            {isManager && (
+            {hasDirectReports && (
               <Link
                 to="/my-team"
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${

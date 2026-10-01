@@ -51,8 +51,8 @@ async def get_direct_reports_by_user_id(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Retrieves direct reports for a specific manager ID.
-    Accessible by Tier 1 / Admins or the manager themselves.
+    Retrieves direct reports for a specific supervisor user ID.
+    Accessible by Tier 1 / Admins or the supervisor themselves.
     """
     is_admin = getattr(current_user, "access_level", None) == 1 or current_user.role == UserRole.ADMIN
     if not is_admin and current_user.id != user_id:
