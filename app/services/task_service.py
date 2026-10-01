@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.exc import StaleDataError
@@ -14,19 +14,23 @@ from app.core.exceptions import (
 from app.models.task import Task, TaskPriority, TaskStatus
 from app.models.user import User, UserRole
 from app.schemas.task import TaskCreate, TaskUpdate, TaskUpdateStatus
+from app.services.common import get_scoped_or_404
 from app.services.permission_service import can_manage_specific_user
 
 
 async def create_task(db: AsyncSession, task_in: TaskCreate, creator: User) -> Task:
     """
-    Creates and assigns a task.
+    Creates and assigns a task within the creator's organization.
     Accessible by Tier 1 OR any user who has direct-report authority over the target employee.
     """
-    # Verify assignee exists
-    result = await db.execute(select(User).where(User.id == task_in.assigned_to))
-    assignee = result.scalar_one_or_none()
-    if not assignee:
-        raise ResourceNotFoundException(f"Assigned user with ID {task_in.assigned_to} not found.")
+    # Verify assignee exists in creator's organization
+    assignee = await get_scoped_or_404(
+        db=db,
+        model=User,
+        id_val=task_in.assigned_to,
+        organization_id=creator.organization_id,
+        error_msg=f"Assigned user with ID {task_in.assigned_to} not found.",
+    )
 
     # Business validation: Check if assignee is an employee (cannot assign to tier 1 admin)
     is_assignee_admin = getattr(assignee, "access_level", None) == 1 or assignee.role != UserRole.EMPLOYEE
@@ -69,36 +73,71 @@ async def get_team_tasks(
     sort_by: str | None = None,
     skip: int = 0,
     limit: int = 10,
-) -> list[Task]:
+    return_total: bool = False,
+) -> list[Task] | tuple[list[Task], int]:
     """
-    Lists tasks assigned to any of the current user's direct reports.
+    Lists tasks assigned to any of the current user's direct reports in the same organization.
     Returns an empty list if the user has no direct reports.
     """
-    reports_stmt = select(User.id).where(User.reports_to_id == user.id)
+    capped_limit = min(max(1, limit), 100)
+    reports_stmt = select(User.id).where(
+        User.reports_to_id == user.id,
+        User.organization_id == user.organization_id,
+        User.is_active.is_(True),
+    )
     reports_res = await db.execute(reports_stmt)
     report_ids = reports_res.scalars().all()
 
     if not report_ids:
+        if return_total:
+            return [], 0
         return []
 
-    stmt = (
-        select(Task)
-        .where(Task.assigned_to.in_(report_ids))
-        .options(selectinload(Task.assigned_to_user))
-    )
+    conditions = [
+        Task.organization_id == user.organization_id,
+        Task.assigned_to.in_(report_ids),
+    ]
 
     if status:
-        stmt = stmt.where(Task.status == status)
+        conditions.append(Task.status == status)
     if priority:
-        stmt = stmt.where(Task.priority == priority)
+        conditions.append(Task.priority == priority)
+
+    if return_total:
+        stmt = (
+            select(Task, func.count(Task.id).over().label("total_count"))
+            .where(*conditions)
+            .options(selectinload(Task.assigned_to_user))
+        )
+    else:
+        stmt = (
+            select(Task)
+            .where(*conditions)
+            .options(selectinload(Task.assigned_to_user))
+        )
 
     if sort_by and hasattr(Task, sort_by):
-        stmt = stmt.order_by(getattr(Task, sort_by).asc())
+        stmt = stmt.order_by(getattr(Task, sort_by).asc(), Task.id.asc())
     else:
-        stmt = stmt.order_by(Task.created_at.desc())
+        stmt = stmt.order_by(Task.created_at.desc(), Task.id.desc())
 
-    stmt = stmt.offset(skip).limit(limit)
+    stmt = stmt.offset(skip).limit(capped_limit)
     result = await db.execute(stmt)
+
+    if return_total:
+        rows = result.all()
+        if rows:
+            tasks = [row[0] for row in rows]
+            total_count = int(rows[0][1])
+        else:
+            tasks = []
+            if skip == 0:
+                total_count = 0
+            else:
+                count_stmt = select(func.count(Task.id)).where(*conditions)
+                total_count = (await db.execute(count_stmt)).scalar() or 0
+        return tasks, total_count
+
     return list(result.scalars().all())
 
 
@@ -110,49 +149,78 @@ async def get_tasks(
     sort_by: str | None = None,
     skip: int = 0,
     limit: int = 10,
-) -> list[Task]:
+    return_total: bool = False,
+) -> list[Task] | tuple[list[Task], int]:
     """
-    Lists tasks. Admins see all, employees see only their own assigned tasks.
-    Supports filtering, sorting, and pagination.
+    Lists tasks. Admins see all tasks in org, employees see only their own assigned tasks.
+    Supports filtering, sorting, and deterministic pagination.
     """
-    stmt = select(Task).options(selectinload(Task.assigned_to_user))
+    capped_limit = min(max(1, limit), 100)
+    conditions = [Task.organization_id == user.organization_id]
 
-    # Tier / Role check: Tier 1 sees all, others see only their own assigned tasks
+    # Tier / Role check: Tier 1 sees all in org, others see only their own assigned tasks
     is_admin = getattr(user, "access_level", None) == 1 or user.role == UserRole.ADMIN
     if not is_admin:
-        stmt = stmt.where(Task.assigned_to == user.id)
+        conditions.append(Task.assigned_to == user.id)
 
     # Filters
     if status:
-        stmt = stmt.where(Task.status == status)
+        conditions.append(Task.status == status)
     if priority:
-        stmt = stmt.where(Task.priority == priority)
+        conditions.append(Task.priority == priority)
 
-    # Dynamic Sorting
+    if return_total:
+        stmt = (
+            select(Task, func.count(Task.id).over().label("total_count"))
+            .where(*conditions)
+            .options(selectinload(Task.assigned_to_user))
+        )
+    else:
+        stmt = select(Task).where(*conditions).options(selectinload(Task.assigned_to_user))
+
+    # Dynamic Sorting with secondary deterministic column
     if sort_by:
-        # Check if the sort_by column is valid on the Task model
         if hasattr(Task, sort_by):
-            stmt = stmt.order_by(getattr(Task, sort_by).asc())
+            stmt = stmt.order_by(getattr(Task, sort_by).asc(), Task.id.asc())
         else:
             raise BadRequestException(f"Invalid sort column: {sort_by}")
     else:
-        # Default sort by created_at descending
-        stmt = stmt.order_by(Task.created_at.desc())
+        # Default sort by created_at descending, then id descending
+        stmt = stmt.order_by(Task.created_at.desc(), Task.id.desc())
 
     # Pagination
-    stmt = stmt.offset(skip).limit(limit)
+    stmt = stmt.offset(skip).limit(capped_limit)
     result = await db.execute(stmt)
+
+    if return_total:
+        rows = result.all()
+        if rows:
+            tasks = [row[0] for row in rows]
+            total_count = int(rows[0][1])
+        else:
+            tasks = []
+            if skip == 0:
+                total_count = 0
+            else:
+                count_stmt = select(func.count(Task.id)).where(*conditions)
+                total_count = (await db.execute(count_stmt)).scalar() or 0
+        return tasks, total_count
+
     return list(result.scalars().all())
 
 
 async def get_task_by_id(db: AsyncSession, task_id: int, user: User) -> Task:
     """
-    Retrieves a single task by ID. Performs ownership validation for non-admin tiers.
+    Retrieves a single task by ID scoped to the user's organization.
+    Performs ownership validation for non-admin tiers.
     """
-    result = await db.execute(select(Task).where(Task.id == task_id))
-    db_task = result.scalar_one_or_none()
-    if not db_task:
-        raise ResourceNotFoundException(f"Task with ID {task_id} not found.")
+    db_task = await get_scoped_or_404(
+        db=db,
+        model=Task,
+        id_val=task_id,
+        organization_id=user.organization_id,
+        error_msg=f"Task with ID {task_id} not found.",
+    )
 
     # Ownership Check
     is_admin = getattr(user, "access_level", None) == 1 or user.role == UserRole.ADMIN
@@ -166,7 +234,8 @@ async def update_task(
     db: AsyncSession, task_id: int, task_update: TaskUpdate | TaskUpdateStatus, user: User
 ) -> Task:
     """
-    Updates a task. Tier 1 can update any field; non-admin can only update status.
+    Updates a task scoped to the user's organization.
+    Tier 1 can update any field; non-admin can only update status.
     Automatically sets completed_at timestamp when status transitions to COMPLETED.
     """
     db_task = await get_task_by_id(db, task_id, user)
@@ -220,16 +289,19 @@ async def update_task(
 
 async def delete_task(db: AsyncSession, task_id: int, user: User) -> None:
     """
-    Deletes a task. Tier 1 only.
+    Deletes a task scoped to the user's organization. Tier 1 only.
     """
     is_admin = getattr(user, "access_level", None) == 1 or user.role == UserRole.ADMIN
     if not is_admin:
         raise AuthorizationException("Only administrators can delete tasks.")
 
-    result = await db.execute(select(Task).where(Task.id == task_id))
-    db_task = result.scalar_one_or_none()
-    if not db_task:
-        raise ResourceNotFoundException(f"Task with ID {task_id} not found.")
+    db_task = await get_scoped_or_404(
+        db=db,
+        model=Task,
+        id_val=task_id,
+        organization_id=user.organization_id,
+        error_msg=f"Task with ID {task_id} not found.",
+    )
 
     await db.delete(db_task)
     await db.commit()

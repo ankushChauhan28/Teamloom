@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { api } from '../lib/api';
+import { api, fetchAllEmployees } from '../lib/api';
 import { Navbar } from '../components/layout/Navbar';
 import { UserMenu } from '../components/layout/UserMenu';
 import { Button } from '../components/ui/Button';
@@ -48,12 +48,12 @@ export function AdminLeavesPage() {
     setIsLoading(true);
     setError('');
     try {
-      const [leavesRes, usersRes] = await Promise.all([
+      const [leavesRes, allEmployees] = await Promise.all([
         api.get('/leaves/?limit=100'),
-        api.get('/users/'),
+        fetchAllEmployees(),
       ]);
       setLeaves(leavesRes.data);
-      setEmployees(usersRes.data);
+      setEmployees(allEmployees);
     } catch (err) {
       const msg = err.response?.data?.detail || 'Failed to load leave requests. Please try again.';
       setError(msg);

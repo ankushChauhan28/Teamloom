@@ -15,7 +15,7 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 |:---:|---|:---:|:---:|---|
 | 1 | Test infrastructure on PostgreSQL (Docker for dev, CI) | Done | 2026-10-01 | Merged to main (PR #1), PostgreSQL test suite on Docker & GitHub Actions CI, safety guard against prod DB, 151 tests passing |
 | 2 | Organization model, migration, backfill into the default organization | Done | 2026-10-02 | merged to main, CI green (run #6), dev DB migrated to revision l2m3n4o5p6q7, 158 tests passing |
-| 3 | Org scoping on all queries + pagination | Pending | | |
+| 3 | Org scoping on all queries + pagination | Done | 2026-10-02 | Tenant-scoped all queries/aggregates/ID lookups (404 on cross-tenant), single-query window pagination with X-Total-Count header, CORS expose_headers, fetchAllEmployees helper, 175 tests passing |
 | 4 | Dual login (Admin email / User ID), signup, email verification | Pending | | |
 | 5 | Isolation test suite (section 5.A) fully green | Pending | | |
 | 6 | Plans, subscription model, `pending_payment` gating, seat limits (race-safe) | Pending | | |
@@ -28,7 +28,8 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 *Note on updating*: When completing a slice, change its status to `Done`, record the completion date (`YYYY-MM-DD`), and add verification notes (e.g. migration revision, test counts, CI status).
 
 ### Known Gaps / Deferred to Later Slices
-- Read queries, listings, and analytics are not yet scoped by `organization_id`; this is intentionally deferred to Slice 3 (FR-12, FR-13, FR-14).
+- `AdminTasksPage` and `AdminLeavesPage` fetch at most 100 records (`limit=100`) and need server-side filtering / paging UI later.
+- Dual login (Admin email / User ID), self-serve signup and email verification are deferred to Slice 4.
 
 ---
 

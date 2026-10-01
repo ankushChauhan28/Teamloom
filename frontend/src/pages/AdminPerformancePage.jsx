@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { api, getPerformanceAnalytics } from '../lib/api';
+import { api, getPerformanceAnalytics, fetchAllEmployees } from '../lib/api';
 import { Navbar } from '../components/layout/Navbar';
 import { UserMenu } from '../components/layout/UserMenu';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/Card';
@@ -21,8 +21,8 @@ export function AdminPerformancePage() {
   // Fetch all active employees for drill-down filter
   const fetchEmployees = useCallback(async () => {
     try {
-      const res = await api.get('/users/');
-      const activeUsers = (res.data || []).filter((u) => u.is_active !== false);
+      const data = await fetchAllEmployees();
+      const activeUsers = (data || []).filter((u) => u.is_active !== false);
       setEmployees(activeUsers);
     } catch (err) {
       console.error('Failed to load employee list:', err);

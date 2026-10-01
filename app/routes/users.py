@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AuthorizationException
@@ -13,6 +13,7 @@ from app.schemas.user import (
     UserUpdate,
 )
 from app.services import user_service
+from app.services.common import get_scoped_or_404
 from app.services.permission_service import (
     check_access_level_dependency,
     populate_user_effective_cache,
@@ -34,6 +35,9 @@ async def get_me(
 
 @router.get("/me/reports", response_model=list[UserRead])
 async def get_my_direct_reports(
+    response: Response,
+    skip: int = 0,
+    limit: int = 100,
     current_user: User = Depends(require_password_change_cleared),
     db: AsyncSession = Depends(get_db),
 ):
@@ -41,12 +45,24 @@ async def get_my_direct_reports(
     Retrieves the list of direct report employees managed by the current user.
     Returns an empty list if the user has no direct reports.
     """
-    return await user_service.get_user_direct_reports(db=db, user_id=current_user.id)
+    reports, total_count = await user_service.get_user_direct_reports(
+        db=db,
+        user_id=current_user.id,
+        organization_id=current_user.organization_id,
+        skip=skip,
+        limit=limit,
+        return_total=True,
+    )
+    response.headers["X-Total-Count"] = str(total_count)
+    return reports
 
 
 @router.get("/{user_id}/direct-reports", response_model=list[UserRead])
 async def get_direct_reports_by_user_id(
     user_id: int,
+    response: Response,
+    skip: int = 0,
+    limit: int = 100,
     current_user: User = Depends(require_password_change_cleared),
     db: AsyncSession = Depends(get_db),
 ):
@@ -57,7 +73,27 @@ async def get_direct_reports_by_user_id(
     is_admin = getattr(current_user, "access_level", None) == 1 or current_user.role == UserRole.ADMIN
     if not is_admin and current_user.id != user_id:
         raise AuthorizationException("You are not authorized to view this user's direct reports.")
-    return await user_service.get_user_direct_reports(db=db, user_id=user_id)
+
+    # If admin, ensure target user belongs to admin's organization
+    if is_admin:
+        await get_scoped_or_404(
+            db=db,
+            model=User,
+            id_val=user_id,
+            organization_id=current_user.organization_id,
+            error_msg="User not found.",
+        )
+
+    reports, total_count = await user_service.get_user_direct_reports(
+        db=db,
+        user_id=user_id,
+        organization_id=current_user.organization_id,
+        skip=skip,
+        limit=limit,
+        return_total=True,
+    )
+    response.headers["X-Total-Count"] = str(total_count)
+    return reports
 
 
 @router.patch("/me", response_model=UserRead)
@@ -75,13 +111,24 @@ async def update_me(
 
 @router.get("/", response_model=list[UserRead])
 async def list_employees(
+    response: Response,
+    skip: int = 0,
+    limit: int = 100,
     db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(check_access_level_dependency(1)),
 ):
     """
-    List all employees in the system. Accessible by Tier 1 only.
+    List all employees in the admin's organization. Accessible by Tier 1 only.
     """
-    return await user_service.get_employees(db=db)
+    employees, total_count = await user_service.get_employees(
+        db=db,
+        organization_id=current_admin.organization_id,
+        skip=skip,
+        limit=limit,
+        return_total=True,
+    )
+    response.headers["X-Total-Count"] = str(total_count)
+    return employees
 
 
 @router.post(
@@ -129,7 +176,9 @@ async def reset_employee_temp_password(
     Accessible by Tier 1 only.
     """
     user, email_sent = await user_service.reset_employee_temp_password(
-        db=db, target_user_id=user_id
+        db=db,
+        target_user_id=user_id,
+        organization_id=current_admin.organization_id,
     )
     return {"id": user.id, "email_sent": email_sent}
 
@@ -145,7 +194,10 @@ async def set_user_reports_to(
     Set or update a user's reports-to supervisor. Accessible by Tier 1 only.
     """
     return await user_service.set_user_reports_to(
-        db=db, target_user_id=user_id, reports_to_id=reports_to_in.reports_to_id
+        db=db,
+        target_user_id=user_id,
+        reports_to_id=reports_to_in.reports_to_id,
+        organization_id=current_admin.organization_id,
     )
 
 
@@ -160,7 +212,10 @@ async def deactivate_user(
     An admin cannot deactivate their own account.
     """
     return await user_service.deactivate_user(
-        db=db, current_admin_id=current_admin.id, target_user_id=user_id
+        db=db,
+        current_admin_id=current_admin.id,
+        target_user_id=user_id,
+        organization_id=current_admin.organization_id,
     )
 
 
@@ -173,6 +228,8 @@ async def reactivate_user(
     """
     Reactivates a user account (is_active = True). Accessible by Tier 1 only.
     """
-    return await user_service.reactivate_user(db=db, target_user_id=user_id)
-
-
+    return await user_service.reactivate_user(
+        db=db,
+        target_user_id=user_id,
+        organization_id=current_admin.organization_id,
+    )

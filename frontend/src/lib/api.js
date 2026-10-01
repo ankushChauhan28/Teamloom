@@ -75,3 +75,24 @@ export const getPerformanceAnalytics = async (params = {}) => {
   return response.data;
 };
 
+export const fetchAllEmployees = async () => {
+  const allEmployees = [];
+  let skip = 0;
+  const limit = 100;
+  let hasMore = true;
+
+  while (hasMore) {
+    const response = await api.get('/users/', { params: { skip, limit } });
+    const data = response.data || [];
+    allEmployees.push(...data);
+    if (data.length < limit) {
+      hasMore = false;
+    } else {
+      skip += limit;
+    }
+  }
+
+  return allEmployees;
+};
+
+
