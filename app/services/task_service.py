@@ -20,7 +20,7 @@ from app.services.permission_service import can_manage_specific_user
 async def create_task(db: AsyncSession, task_in: TaskCreate, creator: User) -> Task:
     """
     Creates and assigns a task.
-    Accessible by Tier 1 OR any user who has managerial authority over the target employee.
+    Accessible by Tier 1 OR any user who has direct-report authority over the target employee.
     """
     # Verify assignee exists
     result = await db.execute(select(User).where(User.id == task_in.assigned_to))
@@ -34,15 +34,15 @@ async def create_task(db: AsyncSession, task_in: TaskCreate, creator: User) -> T
         raise BadRequestException("Tasks can only be assigned to users with the EMPLOYEE role.")
 
     is_admin = getattr(creator, "access_level", None) == 1 or creator.role == UserRole.ADMIN
-    is_authorized_manager = can_manage_specific_user(creator, assignee)
+    has_assignment_authority = can_manage_specific_user(creator, assignee)
 
-    if not (is_admin or is_authorized_manager):
+    if not (is_admin or has_assignment_authority):
         raise AuthorizationException("You do not have permission to assign tasks to this employee.")
 
-    # Defense-in-depth: Self-assignment via manager path blocked
+    # Defense-in-depth: Self-assignment via direct-report path blocked
     if not is_admin and task_in.assigned_to == creator.id:
         raise AuthorizationException(
-            "You cannot assign a task to yourself via the manager assignment path."
+            "You cannot assign a task to yourself via the direct-report assignment path."
         )
 
     db_task = Task(

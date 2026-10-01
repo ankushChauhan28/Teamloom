@@ -37,35 +37,35 @@ def get_user_access_level(user: User | None) -> int:
 
 
 def can_manage_specific_user(
-    manager_user: User | None,
+    actor_user: User | None,
     target_user: User | None,
-    manager_direct_reports_cached: list[int] | set[int] | None = None,
+    actor_direct_reports_cached: list[int] | set[int] | None = None,
 ) -> bool:
     """
-    Evaluates whether manager_user has authority to manage target_user for task assignment.
+    Evaluates whether actor_user has authority to manage target_user for task assignment.
     Rule:
     1. Tier 1 (Admin) can assign tasks to anyone.
     2. Self-management block: actor cannot assign tasks to themselves.
     3. Direct supervisor check: allowed ONLY if target_user.reports_to_id == actor.id
        (or target_user is in cached direct report IDs), regardless of numeric tier.
     """
-    if not manager_user or not target_user:
+    if not actor_user or not target_user:
         return False
 
     # Prevent managing self via supervisor path
-    if manager_user.id == target_user.id:
+    if actor_user.id == target_user.id:
         return False
 
-    manager_base_tier = get_user_access_level(manager_user)
-    if manager_base_tier == 1:
+    actor_access_level = get_user_access_level(actor_user)
+    if actor_access_level == 1:
         return True
 
     # Check direct reporting relationship
     is_direct_report = False
-    if manager_direct_reports_cached is not None:
-        is_direct_report = target_user.id in manager_direct_reports_cached
+    if actor_direct_reports_cached is not None:
+        is_direct_report = target_user.id in actor_direct_reports_cached
     elif hasattr(target_user, "reports_to_id"):
-        is_direct_report = target_user.reports_to_id == manager_user.id
+        is_direct_report = target_user.reports_to_id == actor_user.id
 
     return is_direct_report
 

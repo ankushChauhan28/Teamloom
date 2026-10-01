@@ -59,7 +59,7 @@ function calculateDurationDays(startStr, endStr) {
 }
 
 export function MyTeamPage() {
-  const { directReports: authStoreReports, fetchDirectReports, user } = useAuthStore();
+  const { directReports: authStoreReports, fetchDirectReports } = useAuthStore();
   const [reports, setReports] = useState((authStoreReports || []).filter((r) => r.is_active !== false));
   const [teamTasks, setTeamTasks] = useState([]);
   const [teamLeaves, setTeamLeaves] = useState([]);
@@ -525,7 +525,7 @@ export function MyTeamPage() {
           </div>
         )}
 
-        {/* Tab 2: Team Leave Requests (Read-only for managers) */}
+        {/* Tab 2: Team Leave Requests (Read-only view for direct reports) */}
         {activeTab === 'leaves' && (
           <div className="space-y-4">
             {/* Filter Bar */}
@@ -681,15 +681,11 @@ export function MyTeamPage() {
                     <CardTitle className="text-base font-semibold">
                       {selectedEmployee
                         ? `Individual Performance: ${selectedEmployee.full_name}`
-                        : user?.role === 'ADMIN'
-                        ? 'Organization-Wide Performance'
                         : 'Team Performance Aggregate'}
                     </CardTitle>
                     <CardDescription>
                       {selectedEmployee
                         ? `Analytics for employee code ${selectedEmployee.employee_code || selectedEmployee.email}`
-                        : user?.role === 'ADMIN'
-                        ? 'Combined performance metrics across all tasks in the system'
                         : 'Combined performance metrics across all direct reports'}
                     </CardDescription>
                   </div>
