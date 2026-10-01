@@ -344,8 +344,9 @@ async def test_employee_creation_sequence_desync_skips_collisions(
     db_session.add_all([user1, user2])
     await db_session.commit()
 
-    from tests.conftest import _seq_counter
-    _seq_counter[0] = 1000
+    from sqlalchemy import text
+
+    await db_session.execute(text("SELECT setval('employee_code_seq', 1000, true)"))
 
     response = await client.post(
         "/users/employees",

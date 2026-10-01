@@ -48,30 +48,12 @@ async def get_employees(db: AsyncSession) -> list[User]:
 
 async def _generate_next_employee_code(db: AsyncSession) -> str:
     """
-    Atomically generates the next sequential employee code (e.g. EMP-1006).
-    Uses database sequence `employee_code_seq`, falling back to max suffix
-    calculation if sequence is unavailable.
+    Atomically generates the next sequential employee code (e.g. EMP-1006)
+    using the PostgreSQL `employee_code_seq` sequence.
     """
-    try:
-        seq_res = await db.execute(text("SELECT nextval('employee_code_seq')"))
-        next_val = seq_res.scalar()
-        if next_val:
-            return f"EMP-{next_val}"
-    except Exception:
-        pass
-
-    result = await db.execute(select(User.employee_code).where(User.employee_code.is_not(None)))
-    codes = result.scalars().all()
-    max_num = 1000
-    for code in codes:
-        if code and code.startswith("EMP-"):
-            try:
-                num = int(code.split("-")[1])
-                if num > max_num:
-                    max_num = num
-            except ValueError:
-                pass
-    return f"EMP-{max_num + 1}"
+    seq_res = await db.execute(text("SELECT nextval('employee_code_seq')"))
+    next_val = seq_res.scalar()
+    return f"EMP-{next_val}"
 
 
 def _generate_temp_password(length: int = 14) -> str:
@@ -235,10 +217,6 @@ async def set_user_reports_to(
     await db.commit()
     await db.refresh(target_user)
     return target_user
-
-
-# Backward compatibility alias
-set_user_manager = set_user_reports_to
 
 
 async def get_user_direct_reports(db: AsyncSession, user_id: int) -> list[User]:

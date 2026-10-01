@@ -167,15 +167,25 @@ Open `http://localhost:5173` in your browser.
 
 ## 🧪 Testing & Quality Assurance
 
-Backend tests run against an isolated in-memory database using `pytest`:
+Backend tests run against a real, isolated PostgreSQL database (running via Docker or local PostgreSQL instance) with automatic Alembic migrations and per-test table isolation:
 
 ```bash
-# Run complete test suite
+# 1. Start PostgreSQL with Docker Compose (creates dev and test databases)
+docker compose up -d db
+
+# 2. (Optional) Override test database URL if not using default localhost:5433
+# Windows PowerShell:
+# $env:TEST_DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5433/employee_task_test_db"
+# Linux/macOS:
+# export TEST_DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5433/employee_task_test_db"
+
+# 3. Run complete test suite
 pytest
 
-# Run tests with coverage summary
+# 4. Run tests with coverage summary
 pytest --cov=app --cov-report=term-missing
 ```
 
-- **Pass Rate**: 100% (**110 passing tests**)
-- **Statement Coverage**: **~92% overall**
+- **Pass Rate**: 100% (**151 passing tests**)
+- **Database Engine**: PostgreSQL 16 (Docker) with Alembic migration parity
+- **Statement Coverage**: **86% overall**

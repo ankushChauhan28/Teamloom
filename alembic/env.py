@@ -28,9 +28,27 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def get_url() -> str:
+    """
+    Returns database URL for migrations.
+    Precedence:
+    1. Explicit override passed to Alembic Config (e.g. by test runner via alembic_cfg.set_main_option)
+    2. DATABASE_URL environment variable
+    3. settings.DATABASE_URL from app configuration
+    """
+    raw_url = config.get_main_option("sqlalchemy.url")
+    if not raw_url or raw_url.startswith("driver://") or "%(DB_" in raw_url:
+        raw_url = os.getenv("DATABASE_URL") or settings.DATABASE_URL
+    if raw_url.startswith("postgresql://"):
+        raw_url = raw_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    elif raw_url.startswith("postgres://"):
+        raw_url = raw_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    return raw_url
+
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
-    url = settings.DATABASE_URL
+    url = get_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -52,7 +70,7 @@ def do_run_migrations(connection):
 async def run_async_migrations() -> None:
     """In 'online' mode we create an AsyncEngine and run migrations synchronously on a connection."""
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = settings.DATABASE_URL
+    configuration["sqlalchemy.url"] = get_url()
 
     connectable = async_engine_from_config(
         configuration,
