@@ -1,6 +1,6 @@
 # Teamloom SaaS Requirements: Multi-Tenancy + Billing
 
-Status: requirements locked, implementation not started.
+Status: requirements locked, Slices 1-3 done, Slice 4 (4a-4d) next.
 Scope: turn Teamloom into a multi-company SaaS with pay-first access, packs, subscriptions and invoices. AI features come after this is proven with real-scenario tests.
 
 Items marked **(default)** were not explicitly chosen by the product owner. They are sensible assumptions; change them before implementation if wrong.
@@ -16,7 +16,10 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 | 1 | Test infrastructure on PostgreSQL (Docker for dev, CI) | Done | 2026-10-01 | Merged to main (PR #1), PostgreSQL test suite on Docker & GitHub Actions CI, safety guard against prod DB, 151 tests passing |
 | 2 | Organization model, migration, backfill into the default organization | Done | 2026-10-02 | merged to main, CI green (run #6), dev DB migrated to revision l2m3n4o5p6q7, 158 tests passing |
 | 3 | Org scoping on all queries + pagination | Done | 2026-10-02 | Tenant-scoped all queries/aggregates/ID lookups (404 on cross-tenant), single-query window pagination with X-Total-Count header, CORS expose_headers, fetchAllEmployees helper, 175 tests passing, merged to main, CI green (run #10) |
-| 4 | Dual login (Admin email / User ID), signup, email verification | Pending | | |
+| 4a | DB cleanup: 10-digit numeric User IDs (no `EMP-`), email verification fields, regenerate IDs of the 6 dummy users | Pending | | |
+| 4b | Login modes: Admin (email) and Employee (User ID), server-enforced (X3) | Pending | | |
+| 4c | Signup + email verification (backend) | Pending | | |
+| 4d | Frontend: login toggle, signup page, verify-email page | Pending | | |
 | 5 | Isolation test suite (section 5.A) fully green | Pending | | |
 | 6 | Plans, subscription model, `pending_payment` gating, seat limits (race-safe) | Pending | | |
 | 7 | Payment provider, checkout, webhooks (signature, idempotency) | Pending | | |
@@ -29,7 +32,17 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 
 ### Known Gaps / Deferred to Later Slices
 - `AdminTasksPage` and `AdminLeavesPage` fetch at most 100 records (`limit=100`) and need server-side filtering / paging UI later.
-- Dual login (Admin email / User ID), self-serve signup and email verification are deferred to Slice 4.
+- Dual login (Admin email / User ID), self-serve signup and email verification are deferred to Slice 4 (4a to 4d).
+- Until Slices 6 and 7 are done, a company created by signup is not payment-gated. Do not deploy Slice 4 publicly before then.
+- Admin account recovery (admin loses access to the registered email) has no self-serve path. It will be handled by the operator CLI (Slice 10). A forgot-password flow is not specified yet and needs a decision.
+- Email change is not supported, and additional Tier-1 admins (X8) are deferred.
+
+### Requirement Change Log
+| Date | Change |
+|---|---|
+| 2026-10-02 | A4 changed: User IDs are 10-digit random numeric (was: sequential counter that keeps existing numbers). `EMP-` prefix dropped completely; the 6 existing users are dummy test accounts and get regenerated IDs. FR-5 and FR-11 updated to match. |
+| 2026-10-02 | Added A11 (signup and login live in the app, website only links), A12 (admin credentials: normal email + password + verification link, no Google/Apple sign-in for now), B16 (plan selection and payment happen inside the app; plan activates only via verified webhook). |
+| 2026-10-02 | X8 (additional Tier-1 admins) marked deferred. Out of Scope extended. Slice 4 split into 4a to 4d. |
 
 ---
 
@@ -41,11 +54,13 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 | A1 | One database, shared tables, every row carries `organization_id`. |
 | A2 | **One login page with two modes: "Login as Admin" and "Login as Employee".** Admin mode: official email + password. Employee mode: User ID + password (same as today). |
 | A3 | An email address belongs to exactly one company across the whole system. |
-| A4 | **(default)** User IDs are **numeric only** (1, 2, ... 1220): one global counter across all companies, never reused, always unique. Shown as "User ID" in the UI; the existing `employee_code` column can keep its name. Employee login therefore needs no company code. Existing users keep their current number (the `EMP-` prefix is dropped), so nobody's ID changes. |
+| A4 | User IDs are **numeric only, 10 digits, random** (not sequential, so they cannot be guessed in order), unique across all companies and never reused. Stored as a string in the existing `employee_code` column (so leading zeros are never lost) and shown as "User ID" in the UI. Uniqueness is guaranteed by a database unique constraint, with a retry on collision. Employee login needs no company code and accepts the plain number only: the `EMP-` prefix is dropped completely and the old format is not accepted. The 6 existing users are dummy test accounts, so their IDs are regenerated in the new format. If the 10-digit space is ever exhausted, new IDs move to 15 digits (not built now). |
 | A5 | One user belongs to one company. |
 | A6 | A company is created by self-serve signup (company name, admin name, official email, password). The signup email becomes the first admin's login. |
 | A9 | No platform-admin UI for now; operator tasks are CLI scripts. |
 | A10 | Company data isolation is mandatory and proven by tests on every endpoint. |
+| A11 | Signup, login, email verification and billing live in the app. The future marketing website only shows product info and pricing and links to the app's signup/login pages; it holds no accounts or customer data. |
+| A12 | Admin mode uses a normal email (any provider) + password, verified by a link sent to that email. The person with access to that inbox is the admin. No "Sign in with Google/Apple" for now. |
 
 ### Billing
 | ID | Decision |
@@ -62,6 +77,7 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 | B12 | Invoices: each successful payment produces a downloadable invoice. Optional GST number stored on the company. Legal/tax correctness must be confirmed with a CA before going live. |
 | B14 | Test mode only during development. Live payments only after the go-live checklist. |
 | B15 | The existing (current) data becomes a default company marked "Internal / free forever". It also serves as the demo company. |
+| B16 | Plan selection and payment happen inside the app (never on the marketing website). The website may link to signup with a plan pre-selected (e.g. `?plan=growth`), but that value is only a UI hint and is never trusted: a plan becomes active only after a verified payment webhook. The Billing page shows the plan name, expiry and a renew/pay option. |
 
 ### Environment
 | ID | Decision |
@@ -78,7 +94,7 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 | X5 | Custom pack allows 1 to 500 seats; above that, the UI says "contact us". |
 | X6 | Upgrading to a bigger pack takes effect immediately and starts a new billing period. No proration in v1. |
 | X7 | Amounts are stored in paise (integers), never floats. |
-| X8 | Additional Tier-1 admins (created later by the first admin) log in with their own email in Admin mode. |
+| X8 | **Deferred (not in v1).** Additional Tier-1 admins (created later by the first admin) would log in with their own email in Admin mode. For now each company has exactly one Tier-1 admin, so the operator CLI (Slice 10) is the recovery path if that admin loses email access. |
 
 ---
 
@@ -89,7 +105,7 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 - FR-2: Signup creates the organization (status `pending_payment`), its first Tier-1 Admin, and sends an email verification link.
 - FR-3: Checkout is only possible after the admin email is verified (X2). The app is only usable after the first successful payment.
 - FR-4: Email is unique system-wide (A3). Signup with an existing email is rejected.
-- FR-5: User ID generation stays race-safe: two admins creating users at the same time never get the same code.
+- FR-5: User ID generation stays race-safe: IDs are random 10-digit numbers (A4); the database unique constraint plus retry on collision guarantees two admins creating users at the same time never get the same code.
 - FR-6: Unpaid signups are removed after 7 days by a scheduled job, freeing the email (X1).
 
 ### 2.2 Login and users
@@ -97,7 +113,7 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 - FR-8: Mode rules per X3 are enforced by the backend.
 - FR-9: Admins create employees inside their own organization only (existing flow, now org-scoped). Employee email must be unique system-wide.
 - FR-10: Hierarchy (reports_to), direct-report rules and cycle protection work **inside** an organization; a user can never report to someone in another organization.
-- FR-11: Existing users, tasks and leaves are migrated into one default organization. Existing admins log in via Admin mode with their email; everyone else via Employee mode with their User ID, as before.
+- FR-11: Existing users, tasks and leaves are migrated into one default organization. Existing admins log in via Admin mode with their email; everyone else via Employee mode with their User ID. The existing users are dummy test accounts, so their User IDs are regenerated in the new 10-digit format (A4).
 
 ### 2.3 Data isolation
 - FR-12: Every query on users, tasks, leave requests and analytics is filtered by the requester's organization.
@@ -241,7 +257,7 @@ Each scenario must become an automated test unless marked manual.
 
 ### H. Migration of existing data
 - H1: After migration, one default organization exists ("Internal / free forever"), and every existing user, task and leave belongs to it.
-- H2: Existing admins log in via Admin mode with their email; other existing users via Employee mode with their User ID.
+- H2: Existing admins log in via Admin mode with their email; other existing users via Employee mode with their (regenerated, 10-digit) User ID. The old `EMP-` format no longer works.
 - H3: The default organization has no billing restrictions (no seat limit, no expiry, no payment needed).
 - H4: The existing test suite passes (after fixtures are updated) with no lowered assertions.
 
@@ -265,6 +281,10 @@ Each scenario must become an automated test unless marked manual.
 - Row-level security in the database
 - Real-money payments (until the go-live checklist)
 - SSO, SCIM, custom domains
+- "Sign in with Google/Apple" (OAuth) login
+- Changing a user's or admin's email address
+- Additional Tier-1 admins (X8, deferred)
+- The marketing website (separate future project)
 
 ---
 
@@ -275,7 +295,11 @@ Each slice ships working and tested before the next starts.
 1. Test infrastructure on PostgreSQL (Docker for dev, CI)
 2. Organization model, migration, backfill into the default organization
 3. Org scoping on all queries + pagination
-4. Dual login (Admin email / User ID), signup, email verification
+4. Dual login (Admin email / User ID), signup, email verification. Delivered in four parts, each with its own branch and CI run:
+   - 4a. DB cleanup: 10-digit numeric User IDs, email verification fields, regenerate IDs of the dummy users
+   - 4b. Login modes (Admin email / Employee User ID), server-enforced
+   - 4c. Signup and email verification (backend)
+   - 4d. Frontend: login toggle, signup page, verify-email page
 5. Isolation test suite (section 5.A) fully green
 6. Plans, subscription model, `pending_payment` gating, seat limits (race-safe)
 7. Payment provider, checkout, webhooks (signature, idempotency)
