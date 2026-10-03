@@ -162,7 +162,7 @@ async def test_must_change_password_enforcement_and_change_flow(
     emp_code = create_res.json()["employee_code"]
     login_res = await client.post(
         "/auth/login",
-        json={"employee_code": emp_code, "password": temp_pwd},
+        json={"identifier": emp_code, "password": temp_pwd, "mode": "employee"},
     )
     assert login_res.status_code == status.HTTP_200_OK
     emp_token = login_res.json()["access_token"]
@@ -253,7 +253,7 @@ async def test_pending_password_change_blocked_on_users_me(
 
     login_res = await client.post(
         "/auth/login",
-        json={"employee_code": emp_code, "password": temp_pwd},
+        json={"identifier": emp_code, "password": temp_pwd, "mode": "employee"},
     )
     emp_token = login_res.json()["access_token"]
     emp_headers = {"Authorization": f"Bearer {emp_token}"}
@@ -454,15 +454,26 @@ async def test_old_emp_code_rejected_at_login(
     client: AsyncClient,
 ) -> None:
     """
-    Test that legacy EMP-1001 formatted User IDs are rejected with generic invalid credentials error.
+    Test that legacy EMP-1001 formatted User IDs are rejected with generic invalid credentials error (401)
+    and legacy schema payload missing mode/identifier is rejected with 422.
     """
+    # 1. Sent as identifier in employee mode -> 401 with Incorrect credentials.
     payload = {
-        "employee_code": "EMP-1001",
+        "identifier": "EMP-1001",
         "password": "anypassword123",
+        "mode": "employee",
     }
     response = await client.post("/auth/login", json=payload)
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
-    assert response.json()["detail"] == "Incorrect employee ID or password."
+    assert response.json()["detail"] == "Incorrect credentials."
+
+    # 2. Sent as legacy payload {"employee_code": ..., "password": ...} -> 422 Unprocessable Entity
+    legacy_payload = {
+        "employee_code": "EMP-1001",
+        "password": "anypassword123",
+    }
+    resp_legacy = await client.post("/auth/login", json=legacy_payload)
+    assert resp_legacy.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
 

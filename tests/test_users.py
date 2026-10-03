@@ -197,10 +197,14 @@ async def test_deactivate_and_reactivate_user_flow(
     # 3. Attempt login with deactivated employee credentials -> 401 Unauthorized with generic error
     login_res = await client.post(
         "/auth/login",
-        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+        json={
+            "identifier": employee_user.employee_code,
+            "password": "employeepassword123",
+            "mode": "employee",
+        },
     )
     assert login_res.status_code == status.HTTP_401_UNAUTHORIZED
-    assert login_res.json()["detail"] == "Incorrect employee ID or password."
+    assert login_res.json()["detail"] == "Incorrect credentials."
 
     # 4. Reactivate employee_user -> 200 OK, is_active=True
     react_res = await client.patch(f"/users/{employee_user.id}/reactivate", headers=admin_headers)
@@ -210,7 +214,11 @@ async def test_deactivate_and_reactivate_user_flow(
     # 5. Login after reactivation -> 200 OK
     login_res_2 = await client.post(
         "/auth/login",
-        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+        json={
+            "identifier": employee_user.employee_code,
+            "password": "employeepassword123",
+            "mode": "employee",
+        },
     )
     assert login_res_2.status_code == status.HTTP_200_OK
     assert "access_token" in login_res_2.json()
