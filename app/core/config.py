@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     COOKIE_SECURE: bool = False
+    LOG_LEVEL: str = "INFO"
 
     # Email & Verification Configuration (NFR-3)
     EMAIL_BACKEND: str = "auto"  # "auto", "smtp", or "console"

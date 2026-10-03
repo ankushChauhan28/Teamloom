@@ -33,6 +33,7 @@ class SMTPEmailSender(EmailSender):
     """
     SMTP implementation of EmailSender.
     Sends transactional HTML emails over TLS via standard smtplib.
+    Never logs raw tokens or passwords in production logs.
     """
 
     def send_verification_email(self, email: str, full_name: str, token: str) -> bool:
@@ -75,7 +76,7 @@ class SMTPEmailSender(EmailSender):
             logger.info("Verification email successfully sent via SMTP to %s", email)
             return True
         except Exception as e:
-            logger.error("Failed to send verification email to %s: %s", email, e)
+            logger.error("Failed to send verification email to %s: %s", email, e, exc_info=True)
             return False
 
     def send_welcome_email(
@@ -121,7 +122,7 @@ class SMTPEmailSender(EmailSender):
             logger.info("Welcome email successfully sent to %s.", email)
             return True
         except Exception as e:
-            logger.error("Failed to send welcome email to %s: %s", email, e)
+            logger.error("Failed to send welcome email to %s: %s", email, e, exc_info=True)
             return False
 
 
@@ -129,15 +130,14 @@ class ConsoleEmailSender(EmailSender):
     """
     Console/Logger implementation of EmailSender.
     Used for local development, CI test suites, and deployments without external SMTP access.
-    Prints the email verification link to standard server logs.
+    Prints the email verification link to standard server logs in a clear, greppable format.
     """
 
     def send_verification_email(self, email: str, full_name: str, token: str) -> bool:
         verification_link = f"{settings.verification_base_url}?token={token}"
         logger.info(
-            "[DEV EMAIL SENDER] Verification link for %s (%s): %s",
+            "[DEV EMAIL] Verification link for %s: %s",
             email,
-            full_name,
             verification_link,
         )
         return True
@@ -146,9 +146,8 @@ class ConsoleEmailSender(EmailSender):
         self, email: str, full_name: str, employee_code: str, temp_password: str
     ) -> bool:
         logger.info(
-            "[DEV EMAIL SENDER] Welcome email for %s (%s), User ID: %s",
+            "[DEV EMAIL] Welcome email for %s: User ID=%s",
             email,
-            full_name,
             employee_code,
         )
         return True
@@ -170,19 +169,51 @@ def get_email_sender() -> EmailSender:
 def send_employee_welcome_email(
     email: str, full_name: str, employee_code: str, temp_password: str
 ) -> bool:
-    """Backward-compatible helper invoking get_email_sender().send_welcome_email()."""
-    return get_email_sender().send_welcome_email(
-        email=email,
-        full_name=full_name,
-        employee_code=employee_code,
-        temp_password=temp_password,
-    )
+    """
+    Backward-compatible helper invoking get_email_sender().send_welcome_email().
+    Catches and logs any unhandled exceptions to prevent background task failure from crashing.
+    """
+    try:
+        sender = get_email_sender()
+        success = sender.send_welcome_email(
+            email=email,
+            full_name=full_name,
+            employee_code=employee_code,
+            temp_password=temp_password,
+        )
+        if not success:
+            logger.error("Email delivery failed for welcome email to %s", email)
+        return success
+    except Exception as exc:
+        logger.error(
+            "Unhandled exception in background welcome email task for %s: %s",
+            email,
+            exc,
+            exc_info=True,
+        )
+        return False
 
 
 def send_verification_email(email: str, full_name: str, token: str) -> bool:
-    """Helper invoking get_email_sender().send_verification_email()."""
-    return get_email_sender().send_verification_email(
-        email=email,
-        full_name=full_name,
-        token=token,
-    )
+    """
+    Helper invoking get_email_sender().send_verification_email().
+    Catches and logs any unhandled exceptions to prevent background task failure from crashing.
+    """
+    try:
+        sender = get_email_sender()
+        success = sender.send_verification_email(
+            email=email,
+            full_name=full_name,
+            token=token,
+        )
+        if not success:
+            logger.error("Email delivery failed for verification email to %s", email)
+        return success
+    except Exception as exc:
+        logger.error(
+            "Unhandled exception in background verification email task for %s: %s",
+            email,
+            exc,
+            exc_info=True,
+        )
+        return False

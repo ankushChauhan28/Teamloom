@@ -1,4 +1,7 @@
 from contextlib import asynccontextmanager
+import logging
+import sys
+
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -16,6 +19,16 @@ from app.core.exceptions import (
 from app.core.scheduler import shutdown_scheduler, start_scheduler
 from app import models as _models  # noqa: F401 - Register all SQLAlchemy models at startup
 from app.routes import analytics, auth, leaves, tasks, users
+
+# Configure application logging (drives level via LOG_LEVEL setting and ensures app.* loggers output to stdout)
+logging_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
+root_logger = logging.getLogger()
+root_logger.setLevel(logging_level)
+if not root_logger.handlers:
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(levelname)s:     %(name)s - %(message)s"))
+    root_logger.addHandler(handler)
+logging.getLogger("app").setLevel(logging_level)
 
 
 @asynccontextmanager
