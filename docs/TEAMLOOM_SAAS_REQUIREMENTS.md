@@ -1,6 +1,6 @@
 # Teamloom SaaS Requirements: Multi-Tenancy + Billing
 
-Status: requirements locked, Slices 1-3 done, Slice 4 (4a-4d) next.
+Status: requirements locked, Slices 1-3, 4a-4c done, Slice 4d next.
 Scope: turn Teamloom into a multi-company SaaS with pay-first access, packs, subscriptions and invoices. AI features come after this is proven with real-scenario tests.
 
 Items marked **(default)** were not explicitly chosen by the product owner. They are sensible assumptions; change them before implementation if wrong.
@@ -19,7 +19,7 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 | 4a | DB cleanup: 10-digit numeric User IDs (no `EMP-`), email verification fields, regenerate IDs of the 6 dummy users | Done | 2026-10-02 | PR #4 merged, hotfix PR #5 merged, CI green, 10-digit random IDs, email verification schema, 180 tests passing, 83% coverage |
 | 4b | Login modes: Admin (email) and Employee (User ID), server-enforced (X3) | Done | 2026-10-03 | Merged to main (PR #6), dual login mode enforcement, 187 tests passing |
 | 4c | Signup + email verification (backend) | Done | 2026-10-04 | Branch feat/slice-4c-signup-verification, POST /auth/signup, POST /auth/verify-email, POST /auth/resend-verification, NFR-3 EmailSender interface, unverified admin login enforcement, unverified signup 7d cleanup, backfill migration n4o5p6q7r8s9, 201 tests passing, 82% coverage |
-| 4d | Frontend: login toggle, signup page, verify-email page | Pending | | |
+| 4d | Frontend: login toggle, signup page, verify-email page, unverified login UX, auth UI polish | Pending | | |
 | 5 | Isolation test suite (section 5.A) fully green | Pending | | |
 | 6 | Plans, subscription model, `pending_payment` gating, seat limits (race-safe) | Pending | | |
 | 7 | Payment provider, checkout, webhooks (signature, idempotency) | Pending | | |
@@ -32,10 +32,15 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 
 ### Known Gaps / Deferred to Later Slices
 - `AdminTasksPage` and `AdminLeavesPage` fetch at most 100 records (`limit=100`) and need server-side filtering / paging UI later.
-- Dual login (Admin email / User ID), self-serve signup and email verification are deferred to Slice 4 (4a to 4d).
+- Dual login (Admin email / User ID), self-serve signup and email verification backend are completed (4a-4c); frontend UI is in Slice 4d.
 - Until Slices 6 and 7 are done, a company created by signup is not payment-gated. Do not deploy Slice 4 publicly before then.
 - Admin account recovery (admin loses access to the registered email) has no self-serve path. It will be handled by the operator CLI (Slice 10). A forgot-password flow is not specified yet and needs a decision.
 - Email change is not supported, and additional Tier-1 admins (X8) are deferred.
+
+### Items Needing Decision / Investigation
+- **Login Rate Limit (Decision)**: The login rate limit (10 requests per 15 minutes per IP) may be too tight for organizations operating behind a single corporate / office NAT IP. Needs a decision on whether to relax the limit, key rate limiting by `{IP, identifier}`, or separate IP rate limiting from account lockout.
+- **Production Email Logging (Decision)**: Production environments must never use the console email backend or log raw verification tokens/passwords to logs or monitoring systems.
+- **Create Employee Request Latency (Investigation)**: Creating an employee currently takes 3-4 seconds; investigate whether the welcome email is being sent synchronously inside the request rather than fully non-blocking in background tasks.
 
 ### Requirement Change Log
 | Date | Change |
@@ -45,6 +50,8 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 | 2026-10-02 | X8 (additional Tier-1 admins) marked deferred. Out of Scope extended. Slice 4 split into 4a to 4d. |
 | 2026-10-03 | Slice 4b login modes: payload is {identifier, password, mode}; wrong-mode login is treated as user-not-found and does not count toward lockout; generic error "Incorrect credentials." |
 | 2026-10-04 | Slice 4c self-serve signup & email verification (backend): POST /auth/signup (no auto-login/tokens), POST /auth/verify-email (POST-only to prevent prefetch consumption), POST /auth/resend-verification with anti-enumeration, NFR-3 EmailSender interface with SMTP/Console providers, background email delivery, unverified admin login block, 7-day unverified signup cleanup job, backfill migration n4o5p6q7r8s9. |
+| 2026-10-04 | Slice 4c manual smoke test complete on running dev app: verified real SMTP email delivery, signup, verification link, resend verification, anti-enumeration on duplicate signup/resend, and admin-created employee immediate login. |
+| 2026-10-04 | Slice 4d scope refined: verify-email page (email links to `/verify-email?token=...`), signup page, "check your email + resend" UX for unverified login, clear password field on login mode switch, fix brief change-password form flash before redirect. Added create-employee latency investigation (3-4s welcome email sync vs background). |
 
 ---
 
@@ -298,10 +305,15 @@ Each slice ships working and tested before the next starts.
 2. Organization model, migration, backfill into the default organization
 3. Org scoping on all queries + pagination
 4. Dual login (Admin email / User ID), signup, email verification. Delivered in four parts, each with its own branch and CI run:
-   - 4a. DB cleanup: 10-digit numeric User IDs, email verification fields, regenerate IDs of the dummy users
-   - 4b. Login modes (Admin email / Employee User ID), server-enforced
-   - 4c. Signup and email verification (backend)
-   - 4d. Frontend: login toggle, signup page, verify-email page
+   - 4a. DB cleanup: 10-digit numeric User IDs, email verification fields, regenerate IDs of the dummy users (Done)
+   - 4b. Login modes (Admin email / Employee User ID), server-enforced (Done)
+   - 4c. Signup and email verification backend (Done)
+   - 4d. Frontend:
+     - Login mode toggle (Admin vs Employee) with password field clearing on switch
+     - Signup page (`/signup`)
+     - Email verification landing page (`/verify-email?token=...`)
+     - "Check your email + resend verification" UX for unverified admin logins
+     - Fix brief change-password form flash before dashboard redirect on already-authenticated sessions
 5. Isolation test suite (section 5.A) fully green
 6. Plans, subscription model, `pending_payment` gating, seat limits (race-safe)
 7. Payment provider, checkout, webhooks (signature, idempotency)
