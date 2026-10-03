@@ -133,7 +133,7 @@ async def test_login_nonexistent_user_returns_401(client: AsyncClient) -> None:
     Test login with a non-existent employee_code returns HTTP 401 with generic error message.
     """
     payload = {
-        "employee_code": "EMP-9999",
+        "employee_code": "9999999999",
         "password": "somepassword123",
     }
     response = await client.post("/auth/login", json=payload)

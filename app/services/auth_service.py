@@ -2,7 +2,7 @@ import hashlib
 from datetime import UTC, datetime, timedelta
 
 import jwt
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -164,7 +164,8 @@ async def refresh_access_token(db: AsyncSession, refresh_token: str) -> tuple[st
     if not email:
         raise AuthenticationException("Invalid refresh token payload.")
 
-    result = await db.execute(select(User).where(User.email == email))
+    norm_email = email.strip().lower()
+    result = await db.execute(select(User).where(func.lower(User.email) == norm_email))
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise AuthenticationException("User not found.")

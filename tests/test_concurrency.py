@@ -26,8 +26,10 @@ async def test_concurrent_employee_code_generation_is_strictly_unique(
 ) -> None:
     """
     Tests that 10 concurrent requests to create_employee against real PostgreSQL
-    atomically acquire sequential, non-colliding employee codes (EMP-1001 to EMP-1010).
+    acquire unique, non-colliding 10-digit random User IDs.
     """
+    import re
+
     concurrent_count = 10
 
     async def create_single_employee(idx: int) -> str:
@@ -52,9 +54,9 @@ async def test_concurrent_employee_code_generation_is_strictly_unique(
     unique_codes = set(generated_codes)
     assert len(unique_codes) == concurrent_count, f"Duplicate codes detected: {generated_codes}"
 
-    # 3. Assert all codes match EMP-1001 through EMP-1010
-    expected_codes = {f"EMP-{1001 + i}" for i in range(concurrent_count)}
-    assert unique_codes == expected_codes
+    # 3. Assert all codes match 10-digit numeric pattern
+    for code in generated_codes:
+        assert re.match(r"^[0-9]{10}$", code), f"Code {code} does not match 10-digit pattern"
 
     # 4. Verify all 10 rows exist in the PostgreSQL users table
     async with TestingSessionLocal() as verify_session:

@@ -47,7 +47,7 @@ async def test_unit_authenticate_user_nonexistent_user_raises_exception(
     """
     Unit Test: Authenticating non-existent employee_code runs constant-time dummy bcrypt and raises `InvalidCredentialsException`.
     """
-    login_in = UserLogin(employee_code="EMP-99999", password="anypassword!")
+    login_in = UserLogin(employee_code="9999999999", password="anypassword!")
     with pytest.raises(InvalidCredentialsException):
         await auth_service.authenticate_user(db=db_session, login_in=login_in)
 

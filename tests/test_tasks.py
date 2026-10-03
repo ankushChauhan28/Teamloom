@@ -425,7 +425,7 @@ async def test_get_team_tasks_no_n_plus_one_queries(
         email="task.manager@example.com",
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
-        employee_code="EMP-9000",
+        employee_code="1000009000",
         must_change_password=False,
         organization_id=test_org.id,
     )
@@ -444,7 +444,7 @@ async def test_get_team_tasks_no_n_plus_one_queries(
             email=f"team.member.{r_idx}@example.com",
             hashed_password=hash_password("password123"),
             role=UserRole.EMPLOYEE,
-            employee_code=f"EMP-900{r_idx + 1}",
+            employee_code=f"100000900{r_idx + 1}",
             reports_to_id=mgr.id,
             must_change_password=False,
             organization_id=test_org.id,

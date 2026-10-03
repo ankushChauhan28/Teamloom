@@ -8,6 +8,7 @@ from sqlalchemy import select
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Ensure all models are imported for relationship resolution
+import app.models.email_verification_token  # noqa: F401
 import app.models.leave  # noqa: F401
 import app.models.task  # noqa: F401
 from app.db.session import AsyncSessionLocal
@@ -21,7 +22,7 @@ async def unlock_user(employee_code: str):
 
     emp_code = employee_code.strip()
     if not emp_code:
-        print("\n[-] Error: Employee code cannot be empty.")
+        print("\n[-] Error: User ID cannot be empty.")
         return
 
     async with AsyncSessionLocal() as db:
@@ -30,7 +31,7 @@ async def unlock_user(employee_code: str):
             user = result.scalar_one_or_none()
 
             if not user:
-                print(f"\n[-] Error: User with employee code '{emp_code}' not found in database.")
+                print(f"\n[-] Error: User with User ID '{emp_code}' not found in database.")
                 return
 
             # Reset lockout state
@@ -55,7 +56,7 @@ def main():
     if len(sys.argv) > 1:
         emp_code = sys.argv[1]
     else:
-        emp_code = input("Enter Employee Code to unlock (e.g. EMP-1001): ").strip()
+        emp_code = input("Enter User ID to unlock (e.g. 1000000001): ").strip()
 
     asyncio.run(unlock_user(emp_code))
 

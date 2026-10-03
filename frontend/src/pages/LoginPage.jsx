@@ -34,7 +34,7 @@ export function LoginPage() {
   const validate = () => {
     const newErrors = {};
     if (!employeeCode.trim()) {
-      newErrors.employeeCode = 'Employee ID is required.';
+      newErrors.employeeCode = 'User ID is required.';
     }
 
     if (!password) {
@@ -100,9 +100,10 @@ export function LoginPage() {
 
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           <Input
-            label="Employee ID"
+            label="User ID"
             type="text"
-            placeholder="EMP-1001"
+            inputMode="numeric"
+            placeholder="1000000001"
             value={employeeCode}
             onChange={(e) => {
               setEmployeeCode(e.target.value);

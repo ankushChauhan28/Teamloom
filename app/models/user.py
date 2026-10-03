@@ -30,7 +30,18 @@ class User(Base):
     )
     reports_to_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     designation = Column(String(255), nullable=True, default=None)
-    employee_code = Column(String, unique=True, index=True, nullable=True)
+    employee_code = Column(
+        String,
+        CheckConstraint(
+            "employee_code IS NULL OR employee_code ~ '^[0-9]{10}$'",
+            name="check_user_employee_code_format",
+        ),
+        unique=True,
+        index=True,
+        nullable=True,
+    )
+    is_email_verified = Column(Boolean, default=False, nullable=False)
+    email_verified_at = Column(DateTime(timezone=True), nullable=True, default=None)
     must_change_password = Column(Boolean, default=False, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     failed_login_attempts = Column(Integer, default=0, nullable=False)
@@ -45,6 +56,11 @@ class User(Base):
 
     # Relationships (relationships mapped as strings to avoid circular import issues)
     organization = relationship("Organization", back_populates="users")
+    verification_tokens = relationship(
+        "EmailVerificationToken",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     reports_to = relationship(
         "User",
         remote_side=[id],

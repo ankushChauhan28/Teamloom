@@ -137,7 +137,7 @@ async def test_indistinguishable_locked_versus_invalid_credentials_responses(
     # 1. Non-existent employee ID
     res_nonexistent = await client.post(
         "/auth/login",
-        json={"employee_code": "EMP-9999", "password": "AnyPassword!"},
+        json={"employee_code": "9999999999", "password": "AnyPassword!"},
     )
 
     # 2. Invalid password
@@ -180,7 +180,7 @@ async def test_ip_rate_limiting_exceeded_returns_429(
     for i in range(10):
         res = await client.post(
             "/auth/login",
-            json={"employee_code": f"EMP-100{i}", "password": "InvalidPassword!"},
+            json={"employee_code": f"900000000{i}", "password": "InvalidPassword!"},
             headers=headers,
         )
         assert res.status_code != status.HTTP_429_TOO_MANY_REQUESTS
@@ -268,7 +268,7 @@ async def test_rate_limit_ignores_spoofed_header_without_trusted_proxy(
     for i in range(10):
         res = await client.post(
             "/auth/login",
-            json={"employee_code": f"EMP-999{i}", "password": "WrongPassword!"},
+            json={"employee_code": f"900000000{i}", "password": "WrongPassword!"},
             headers={"X-Forwarded-For": f"198.51.100.{i}"},
         )
         assert res.status_code != status.HTTP_429_TOO_MANY_REQUESTS
@@ -304,7 +304,7 @@ async def test_rate_limit_uses_forwarded_header_when_proxy_trusted(
     for i in range(10):
         res = await client.post(
             "/auth/login",
-            json={"employee_code": f"EMP-888{i}", "password": "WrongPassword!"},
+            json={"employee_code": f"800000000{i}", "password": "WrongPassword!"},
             headers={"X-Forwarded-For": f"{client_ip_a}, 127.0.0.1"},
         )
         assert res.status_code != status.HTTP_429_TOO_MANY_REQUESTS

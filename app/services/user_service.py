@@ -90,14 +90,12 @@ async def get_employees(
     return list(result.scalars().all())
 
 
-async def _generate_next_employee_code(db: AsyncSession) -> str:
+def _generate_next_employee_code(db: AsyncSession | None = None) -> str:
     """
-    Atomically generates the next sequential employee code (e.g. EMP-1006)
-    using the PostgreSQL `employee_code_seq` sequence.
+    Generates a cryptographically secure, random 10-digit numeric User ID
+    formatted as a zero-padded string (e.g. '0481927361').
     """
-    seq_res = await db.execute(text("SELECT nextval('employee_code_seq')"))
-    next_val = seq_res.scalar()
-    return f"EMP-{next_val}"
+    return f"{secrets.randbelow(10**10):010d}"
 
 
 def _generate_temp_password(length: int = 14) -> str:
@@ -125,16 +123,17 @@ async def create_employee(
 ) -> tuple[User, bool]:
     """
     Creates a new employee account:
-    - Verifies email uniqueness.
+    - Verifies email uniqueness (case-insensitive).
     - Resolves organization_id.
     - Validates reports_to_id belongs to the same organization if provided.
-    - Generates sequential employee_code (EMP-1001, etc) with retry loop for collision safety.
+    - Generates 10-digit random numeric User ID with savepoint-based retry loop for collision safety.
     - Generates temporary password via secrets module.
     - Hashes password and sets must_change_password = True.
     - Attempts to send welcome email via SMTP.
     - Returns tuple of (created_user, email_sent_bool).
     """
-    result = await db.execute(select(User).where(User.email == employee_in.email))
+    norm_email = employee_in.email.strip().lower()
+    result = await db.execute(select(User).where(func.lower(User.email) == norm_email))
     existing_user = result.scalar_one_or_none()
     if existing_user:
         raise UserAlreadyExistsException("A user with this email address already exists.")
@@ -171,30 +170,31 @@ async def create_employee(
     hashed_pwd = hash_password(temp_password)
 
     max_attempts = 10
+    new_user = None
     for attempt in range(max_attempts):
-        emp_code = await _generate_next_employee_code(db)
-        new_user = User(
-            full_name=employee_in.full_name,
-            email=employee_in.email,
-            hashed_password=hashed_pwd,
-            role=UserRole.EMPLOYEE,
-            access_level=employee_in.access_level or 3,
-            reports_to_id=employee_in.reports_to_id,
-            designation=employee_in.designation,
-            employee_code=emp_code,
-            must_change_password=True,
-            organization_id=organization_id,
-        )
-
-        db.add(new_user)
+        emp_code = _generate_next_employee_code(db)
         try:
+            async with db.begin_nested():
+                new_user = User(
+                    full_name=employee_in.full_name,
+                    email=norm_email,
+                    hashed_password=hashed_pwd,
+                    role=UserRole.EMPLOYEE,
+                    access_level=employee_in.access_level or 3,
+                    reports_to_id=employee_in.reports_to_id,
+                    designation=employee_in.designation,
+                    employee_code=emp_code,
+                    must_change_password=True,
+                    organization_id=organization_id,
+                )
+                db.add(new_user)
+                await db.flush()
             await db.commit()
             await db.refresh(new_user)
             break
         except IntegrityError as exc:
-            await db.rollback()
             logger.warning(
-                f"Employee code collision on attempt {attempt + 1}/{max_attempts} for code {emp_code}: {exc}"
+                f"User ID collision on attempt {attempt + 1}/{max_attempts} for code {emp_code}: {exc}"
             )
             if attempt == max_attempts - 1:
                 raise AppException(
@@ -205,6 +205,12 @@ async def create_employee(
             await db.rollback()
             if attempt == max_attempts - 1:
                 raise
+
+    if new_user is None:
+        raise AppException(
+            message="Failed to generate a unique employee code after multiple attempts — please retry",
+            status_code=500,
+        )
 
     email_sent = send_employee_welcome_email(
         email=new_user.email,

@@ -368,7 +368,7 @@ async def test_deactivated_employee_excluded_from_direct_reports(
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
         access_level=2,
-        employee_code="EMP-1020",
+        employee_code="1000001020",
         must_change_password=False,
         organization_id=admin_user.organization_id,
     )

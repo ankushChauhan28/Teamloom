@@ -15,10 +15,10 @@ from app.models.user import User, UserRole
 async def analytics_hierarchy(db_session: AsyncSession, test_org: Organization):
     """
     Sets up a complete hierarchy for analytics testing:
-    - Admin: EMP-2001 (ADMIN role)
-    - Manager: EMP-2002 (EMPLOYEE role, manages Report 1)
-    - Report 1: EMP-2003 (EMPLOYEE role, reports_to_id = Manager.id)
-    - Other Emp: EMP-2004 (EMPLOYEE role, reports_to_id = None)
+    - Admin: 1000002001 (ADMIN role)
+    - Manager: 1000002002 (EMPLOYEE role, manages Report 1)
+    - Report 1: 1000002003 (EMPLOYEE role, reports_to_id = Manager.id)
+    - Other Emp: 1000002004 (EMPLOYEE role, reports_to_id = None)
     """
     admin = User(
         full_name="Analytics Admin",
@@ -26,7 +26,7 @@ async def analytics_hierarchy(db_session: AsyncSession, test_org: Organization):
         hashed_password=hash_password("password123"),
         role=UserRole.ADMIN,
         access_level=1,
-        employee_code="EMP-2001",
+        employee_code="1000002001",
         must_change_password=False,
         organization_id=test_org.id,
     )
@@ -38,7 +38,7 @@ async def analytics_hierarchy(db_session: AsyncSession, test_org: Organization):
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
         access_level=2,
-        employee_code="EMP-2002",
+        employee_code="1000002002",
         must_change_password=False,
         organization_id=test_org.id,
     )
@@ -52,7 +52,7 @@ async def analytics_hierarchy(db_session: AsyncSession, test_org: Organization):
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
         access_level=3,
-        employee_code="EMP-2003",
+        employee_code="1000002003",
         reports_to_id=manager.id,
         must_change_password=False,
         organization_id=test_org.id,
@@ -65,7 +65,7 @@ async def analytics_hierarchy(db_session: AsyncSession, test_org: Organization):
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
         access_level=4,
-        employee_code="EMP-2004",
+        employee_code="1000002004",
         reports_to_id=None,
         must_change_password=False,
         organization_id=test_org.id,
@@ -562,7 +562,7 @@ async def test_zero_total_tasks_employee_returns_clean_response(
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
         access_level=3,
-        employee_code="EMP-9999",
+        employee_code="1000009999",
         must_change_password=False,
         organization_id=test_org.id,
     )
