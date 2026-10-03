@@ -220,16 +220,10 @@ def mock_send_welcome_email() -> AsyncGenerator[MagicMock, None]:
     Automatically mocks send_employee_welcome_email for ALL tests in the suite
     so no real SMTP network connections are ever attempted during pytest execution.
     """
-    with (
-        patch(
-            "app.services.user_service.send_employee_welcome_email",
-            return_value=True,
-        ) as mock_service_email,
-        patch(
-            "app.core.email.send_employee_welcome_email",
-            return_value=True,
-        ),
-    ):
+    with patch(
+        "app.services.user_service.send_employee_welcome_email",
+        return_value=True,
+    ) as mock_service_email:
         yield mock_service_email
 
 

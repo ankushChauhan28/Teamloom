@@ -508,24 +508,53 @@ async def test_cleanup_unverified_signups(db_session: AsyncSession) -> None:
     ).scalar_one_or_none() is not None
 
 
-@pytest.mark.asyncio
-async def test_email_sender_interface_implementations() -> None:
+def test_email_sender_interface_implementations(caplog: pytest.LogCaptureFixture) -> None:
     """
-    NFR-3: Test ConsoleEmailSender and SMTPEmailSender behaviors.
+    NFR-3: Test ConsoleEmailSender and SMTPEmailSender behaviors with caplog verification.
     """
-    console_sender = ConsoleEmailSender()
-    assert console_sender.send_verification_email("test@example.com", "Tester", "token123") is True
-    assert console_sender.send_welcome_email("test@example.com", "Tester", "1000000001", "temp123") is True
+    import logging
+    from app.core.email import send_employee_welcome_email, send_verification_email
 
-    # SMTPEmailSender falls back to console if SMTP unconfigured
+    console_sender = ConsoleEmailSender()
+
+    # 1. Verification link format matches [DEV EMAIL] Verification link for <email>: <full link>
+    with caplog.at_level(logging.INFO):
+        console_sender.send_verification_email("alice@example.com", "Alice", "testtoken123")
+        assert (
+            "[DEV EMAIL] Verification link for alice@example.com: http://localhost:5173/verify-email?token=testtoken123"
+            in caplog.text
+        )
+
+        # 2. Welcome email format
+        console_sender.send_welcome_email("bob@example.com", "Bob", "1000000001", "temp123")
+        assert "[DEV EMAIL] Welcome email for bob@example.com: User ID=1000000001" in caplog.text
+
+    # 3. SMTPEmailSender falls back to console if SMTP unconfigured
     smtp_sender = SMTPEmailSender()
     with patch.object(settings, "SMTP_HOST", None):
         assert smtp_sender.send_verification_email("test@example.com", "Tester", "token123") is True
         assert smtp_sender.send_welcome_email("test@example.com", "Tester", "1000000001", "temp123") is True
 
-    # get_email_sender() respects EMAIL_BACKEND setting
+    # 4. get_email_sender() respects EMAIL_BACKEND setting
     with patch.object(settings, "EMAIL_BACKEND", "console"):
         assert isinstance(get_email_sender(), ConsoleEmailSender)
 
     with patch.object(settings, "EMAIL_BACKEND", "smtp"):
         assert isinstance(get_email_sender(), SMTPEmailSender)
+
+    # 5. Background email failure is logged at ERROR and does not raise exception
+    caplog.clear()
+    with patch("app.core.email.get_email_sender", side_effect=RuntimeError("SMTP network down")):
+        result = send_verification_email("failed@example.com", "Failed User", "tok456")
+        assert result is False
+        assert (
+            "Unhandled exception in background verification email task for failed@example.com"
+            in caplog.text
+        )
+
+        result_welcome = send_employee_welcome_email("failed@example.com", "Failed User", "1000000002", "pwd")
+        assert result_welcome is False
+        assert (
+            "Unhandled exception in background welcome email task for failed@example.com"
+            in caplog.text
+        )
