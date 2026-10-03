@@ -9,9 +9,7 @@ from sqlalchemy import select
 # Ensure app imports work
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import app.models.email_verification_token  # noqa: F401
-import app.models.leave  # noqa: F401
-import app.models.task  # noqa: F401
+from app import models as _models  # noqa: F401
 from app.core.security import hash_password
 from app.db.session import AsyncSessionLocal
 from app.models.user import User
@@ -43,7 +41,7 @@ async def reset_passwords():
                 user.locked_until = None
                 user.must_change_password = False
                 user.is_active = True
-                resolved_users.append((user.employee_code, norm_email, password))
+                resolved_users.append((user.employee_code, norm_email, password, user.access_level))
                 print(f"[+] Updated: {user.employee_code} ({user.email}) -> password updated to '{password}'")
             else:
                 print(f"[-] Warning: User not found for {email}")
@@ -58,15 +56,22 @@ def verify_logins():
     api_url = "http://localhost:8000/auth/login"
     all_succeeded = True
 
-    for emp_code, email, password in resolved_users:
-        payload = json.dumps({"employee_code": emp_code, "password": password}).encode("utf-8")
+    for emp_code, email, password, access_level in resolved_users:
+        if access_level == 1:
+            identifier = email
+            mode = "admin"
+        else:
+            identifier = emp_code
+            mode = "employee"
+
+        payload = json.dumps({"identifier": identifier, "password": password, "mode": mode}).encode("utf-8")
         req = urllib.request.Request(api_url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
         try:
             with urllib.request.urlopen(req) as resp:
                 if resp.status == 200:
                     data = json.loads(resp.read().decode("utf-8"))
                     user_info = data.get("user", {})
-                    print(f"✅ Password reset for {email} ({emp_code}) -> Login OK! [Role: {user_info.get('role')}, Tier: {user_info.get('access_level')}]")
+                    print(f"✅ Password reset for {email} ({emp_code}) [mode={mode}] -> Login OK! [Role: {user_info.get('role')}, Tier: {user_info.get('access_level')}]")
                 else:
                     print(f"❌ Login failed for {email} ({emp_code}): HTTP {resp.status}")
                     all_succeeded = False

@@ -77,14 +77,14 @@ def run_all_qa_tests():
     admin_password = "adminpassword123"
 
     status, body = make_api_request(
-        "/auth/login", "POST", {"email": admin_email, "password": admin_password}
+        "/auth/login", "POST", {"identifier": admin_email, "password": admin_password, "mode": "admin"}
     )
     if status != 200:
         print("Admin user does not exist or credentials invalid. Attempting to seed admin...")
         # Execute seed logic via python direct DB insertion or script
         os.system("python seed_admin.py")
         status, body = make_api_request(
-            "/auth/login", "POST", {"email": admin_email, "password": admin_password}
+            "/auth/login", "POST", {"identifier": admin_email, "password": admin_password, "mode": "admin"}
         )
 
     admin_token = body.get("access_token")
@@ -108,15 +108,19 @@ def run_all_qa_tests():
     emp_ids = {}
 
     for emp in employees_data:
+        emp_code = None
         reg_status, reg_body = make_api_request("/auth/register", "POST", emp)
         if reg_status == 201:
             emp_ids[emp["email"]] = reg_body["id"]
+            emp_code = reg_body.get("employee_code")
         elif reg_status == 400 and "already exists" in str(reg_body):
             pass
 
         # Login to get token and ID
+        login_ident = emp_code if emp_code else emp["email"]
+        login_mode = "employee" if emp_code else "admin"
         l_status, l_body = make_api_request(
-            "/auth/login", "POST", {"email": emp["email"], "password": emp["password"]}
+            "/auth/login", "POST", {"identifier": login_ident, "password": emp["password"], "mode": login_mode}
         )
         if l_status == 200:
             emp_tokens[emp["email"]] = l_body["access_token"]
@@ -380,7 +384,7 @@ def run_all_qa_tests():
 
     # TC-AUTH-05: Login correct credentials
     st, res = make_api_request(
-        "/auth/login", "POST", {"email": "priya.sharma@company.com", "password": "password123"}
+        "/auth/login", "POST", {"identifier": "admin@example.com", "password": "adminpassword123", "mode": "admin"}
     )
     record_test(
         "TC-AUTH-05",
@@ -389,7 +393,7 @@ def run_all_qa_tests():
         "/auth/login",
         "POST",
         "Public",
-        {"email": "priya.sharma@company.com", "password": "***"},
+        {"identifier": "admin@example.com", "password": "***", "mode": "admin"},
         200,
         st,
         res,
@@ -397,7 +401,7 @@ def run_all_qa_tests():
 
     # TC-AUTH-06: Login wrong password
     st, res = make_api_request(
-        "/auth/login", "POST", {"email": "priya.sharma@company.com", "password": "wrongpassword"}
+        "/auth/login", "POST", {"identifier": "admin@example.com", "password": "wrongpassword", "mode": "admin"}
     )
     record_test(
         "TC-AUTH-06",
@@ -406,7 +410,7 @@ def run_all_qa_tests():
         "/auth/login",
         "POST",
         "Public",
-        {"email": "priya.sharma@company.com", "password": "***"},
+        {"identifier": "admin@example.com", "password": "***", "mode": "admin"},
         401,
         st,
         res,
@@ -414,7 +418,7 @@ def run_all_qa_tests():
 
     # TC-AUTH-07: Login non-existent email
     st, res = make_api_request(
-        "/auth/login", "POST", {"email": "nonexistent.email@company.com", "password": "password123"}
+        "/auth/login", "POST", {"identifier": "nonexistent.email@company.com", "password": "password123", "mode": "admin"}
     )
     record_test(
         "TC-AUTH-07",
@@ -423,7 +427,7 @@ def run_all_qa_tests():
         "/auth/login",
         "POST",
         "Public",
-        {"email": "nonexistent.email@company.com"},
+        {"identifier": "nonexistent.email@company.com", "mode": "admin"},
         401,
         st,
         res,

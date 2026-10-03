@@ -32,7 +32,7 @@ def run_tests():
 
     # 1. Admin Login
     print("\n[1] Testing Admin Login...")
-    login_payload = {"email": "admin@example.com", "password": "adminpassword123"}
+    login_payload = {"identifier": "admin@example.com", "password": "adminpassword123", "mode": "admin"}
     status, body = make_request("/auth/login", "POST", login_payload)
     if status == 200 and "access_token" in body:
         admin_token = body["access_token"]
@@ -50,14 +50,18 @@ def run_tests():
         "password": "securepassword123",
     }
     status, body = make_request("/auth/register", "POST", register_payload)
+    emp_code = None
     if status == 201:
         employee_id = body["id"]
+        emp_code = body.get("employee_code")
         print(f"    -> Employee registered. ID: {employee_id}")
     elif status == 400 and "already exists" in str(body):
         print("    -> Employee already registered. Fetching user info...")
         # Get employees list as admin to find the ID
         status, users = make_request("/users/", "GET", token=admin_token)
-        employee_id = next(u["id"] for u in users if u["email"] == "employee@example.com")
+        target = next(u for u in users if u["email"] == "employee@example.com")
+        employee_id = target["id"]
+        emp_code = target.get("employee_code")
         print(f"    -> Found Employee ID: {employee_id}")
     else:
         print(f"    -> FAILED: Status {status}, Body: {body}")
@@ -65,7 +69,7 @@ def run_tests():
 
     # 3. Employee Login
     print("\n[3] Testing Employee Login...")
-    emp_login_payload = {"email": "employee@example.com", "password": "securepassword123"}
+    emp_login_payload = {"identifier": emp_code, "password": "securepassword123", "mode": "employee"}
     status, body = make_request("/auth/login", "POST", emp_login_payload)
     if status == 200 and "access_token" in body:
         emp_token = body["access_token"]
