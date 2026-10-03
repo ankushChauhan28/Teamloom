@@ -112,7 +112,8 @@ async def swagger_login(
             headers={"Retry-After": str(rate_result.retry_after_seconds)},
         )
 
-    login_in = UserLogin(employee_code=form_data.username, password=form_data.password)
+    mode = "admin" if "@" in form_data.username else "employee"
+    login_in = UserLogin(identifier=form_data.username, password=form_data.password, mode=mode)
     user = await auth_service.authenticate_user(db=db, login_in=login_in)
     access_token = create_access_token(email=user.email, role=user.role.value)
     refresh_token = create_refresh_token(email=user.email, role=user.role.value)
