@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 import logging
 import secrets
 import string
@@ -129,6 +130,7 @@ async def create_employee(
     - Generates 10-digit random numeric User ID with savepoint-based retry loop for collision safety.
     - Generates temporary password via secrets module.
     - Hashes password and sets must_change_password = True.
+    - Sets is_email_verified = True (admin-created employees do not require email verification).
     - Attempts to send welcome email via SMTP.
     - Returns tuple of (created_user, email_sent_bool).
     """
@@ -185,6 +187,8 @@ async def create_employee(
                     designation=employee_in.designation,
                     employee_code=emp_code,
                     must_change_password=True,
+                    is_email_verified=True,
+                    email_verified_at=datetime.now(UTC),
                     organization_id=organization_id,
                 )
                 db.add(new_user)
@@ -192,6 +196,7 @@ async def create_employee(
             await db.commit()
             await db.refresh(new_user)
             break
+
         except IntegrityError as exc:
             logger.warning(
                 f"User ID collision on attempt {attempt + 1}/{max_attempts} for code {emp_code}: {exc}"

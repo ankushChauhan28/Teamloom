@@ -117,6 +117,33 @@ class UserRead(UserBase):
 UserResponse = UserRead
 
 
+# Self-Serve Signup Schemas (Slice 4c)
+class SignupRequest(BaseModel):
+    company_name: str
+    full_name: str
+    email: EmailStr
+    password: str
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v: str) -> str:
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
+
+    @field_validator("company_name", "full_name")
+    @classmethod
+    def strip_and_validate_non_empty(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("Field cannot be empty or contain only whitespace.")
+        return stripped
+
+
+class SignupResponse(BaseModel):
+    message: str = "Signup successful. Please check your email to verify your account."
+
+
 # Email Verification Schemas
 class EmailVerificationRequest(BaseModel):
     token: str
@@ -124,8 +151,8 @@ class EmailVerificationRequest(BaseModel):
 
 class EmailVerificationResponse(BaseModel):
     message: str
-    email: EmailStr
-    is_verified: bool
+    email: EmailStr | None = None
+    is_verified: bool = True
 
 
 class ResendVerificationRequest(BaseModel):
@@ -137,3 +164,7 @@ class ResendVerificationRequest(BaseModel):
         if isinstance(v, str):
             return v.strip().lower()
         return v
+
+
+class ResendVerificationResponse(BaseModel):
+    message: str = "If an unverified account exists for this email, a verification link has been sent."
