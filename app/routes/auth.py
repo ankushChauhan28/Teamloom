@@ -1,9 +1,10 @@
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.email import send_verification_email
 from app.core.exceptions import AuthenticationException
 from app.core.rate_limit import RateLimiter, get_rate_limiter
 from app.core.security import (
@@ -15,7 +16,18 @@ from app.core.security import (
 )
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.user import PasswordChange, Token, UserLogin, UserRead
+from app.schemas.user import (
+    EmailVerificationRequest,
+    EmailVerificationResponse,
+    PasswordChange,
+    ResendVerificationRequest,
+    ResendVerificationResponse,
+    SignupRequest,
+    SignupResponse,
+    Token,
+    UserLogin,
+    UserRead,
+)
 from app.services import auth_service
 from app.services.permission_service import populate_user_effective_cache
 
@@ -49,6 +61,106 @@ def set_refresh_token_cookie(response: Response, refresh_token: str) -> None:
         max_age=7 * 24 * 60 * 60,  # 7 days
         path="/auth",
     )
+
+
+@router.post("/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED)
+async def signup(
+    signup_in: SignupRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter),
+):
+    """
+    Creates a new Organization (pending_payment) and its first Tier-1 Admin user (FR-2, A6).
+    Enforces IP-based rate limiting (signup:{client_ip}).
+    Dispatches single-use email verification link in background task (NFR-3).
+    Anti-enumeration: duplicate registrations return 201 with identical generic response payload.
+    Does NOT return auth tokens or auto-login the user.
+    """
+    if not isinstance(rate_limiter, RateLimiter):
+        rate_limiter = get_rate_limiter()
+
+    client_ip = extract_client_ip(request)
+    rate_result = await rate_limiter.check_and_increment(f"signup:{client_ip}")
+    if not rate_result.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many signup attempts. Please try again later.",
+            headers={"Retry-After": str(rate_result.retry_after_seconds)},
+        )
+
+    _, email, full_name, raw_token = await auth_service.signup_organization_and_admin(
+        db=db, signup_in=signup_in
+    )
+
+    if raw_token and email and full_name:
+        background_tasks.add_task(
+            send_verification_email,
+            email=email,
+            full_name=full_name,
+            token=raw_token,
+        )
+
+    return SignupResponse()
+
+
+@router.post("/verify-email", response_model=EmailVerificationResponse, status_code=status.HTTP_200_OK)
+async def verify_email_endpoint(
+    req: EmailVerificationRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Verifies user email using the single-use token (FR-2, X2).
+    POST-only endpoint to prevent email scanners from prefetching and consuming single-use tokens.
+    Marks token consumed and activates is_email_verified = True on user.
+    """
+    user = await auth_service.verify_email(db=db, token=req.token)
+    return EmailVerificationResponse(
+        message="Email successfully verified.",
+        email=user.email,
+        is_verified=True,
+    )
+
+
+@router.post("/resend-verification", response_model=ResendVerificationResponse, status_code=status.HTTP_200_OK)
+async def resend_verification_endpoint(
+    req: ResendVerificationRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter),
+):
+    """
+    Resends email verification link to an unverified admin account.
+    Enforces IP-based rate limiting (resend_verification:{client_ip}).
+    Anti-enumeration: returns identical generic response for unknown or already-verified emails.
+    """
+    if not isinstance(rate_limiter, RateLimiter):
+        rate_limiter = get_rate_limiter()
+
+    client_ip = extract_client_ip(request)
+    rate_result = await rate_limiter.check_and_increment(f"resend_verification:{client_ip}")
+    if not rate_result.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many verification requests. Please try again later.",
+            headers={"Retry-After": str(rate_result.retry_after_seconds)},
+        )
+
+    _, email, full_name, raw_token = await auth_service.resend_verification_email(
+        db=db, email=req.email
+    )
+
+    if raw_token and email and full_name:
+        background_tasks.add_task(
+            send_verification_email,
+            email=email,
+            full_name=full_name,
+            token=raw_token,
+        )
+
+    return ResendVerificationResponse()
 
 
 @router.post("/login", response_model=Token)

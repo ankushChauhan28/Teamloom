@@ -14,13 +14,20 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     COOKIE_SECURE: bool = False
 
-    # SMTP Configuration
+    # Email & Verification Configuration (NFR-3)
+    EMAIL_BACKEND: str = "auto"  # "auto", "smtp", or "console"
+    EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS: int = 24
+    EMAIL_VERIFICATION_URL: str | None = None
     SMTP_HOST: str | None = None
     SMTP_PORT: int = 587
     SMTP_USERNAME: str | None = None
     SMTP_APP_PASSWORD: str | None = None
     SMTP_FROM_EMAIL: str | None = None
     FRONTEND_URL: str = "http://localhost:5173"
+
+    @property
+    def verification_base_url(self) -> str:
+        return self.EMAIL_VERIFICATION_URL or f"{self.FRONTEND_URL}/verify-email"
 
     # CORS Origins can be a JSON-formatted list or a comma-separated string
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]

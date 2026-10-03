@@ -2,7 +2,10 @@ import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.db.base import AsyncSessionLocal
-from app.services.auth_service import cleanup_expired_revocations
+from app.services.auth_service import (
+    cleanup_expired_revocations,
+    cleanup_unverified_signups,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,24 @@ async def run_cleanup_expired_tokens() -> int:
         return 0
 
 
+async def run_cleanup_unverified_signups() -> int:
+    """
+    Background job that creates its own independent AsyncSession
+    to delete unverified signups and empty organizations older than 7 days (X1, B8).
+    """
+    try:
+        async with AsyncSessionLocal() as db:
+            deleted_count = await cleanup_unverified_signups(db)
+            logger.info(
+                "Unverified signups cleanup job executed: %d signups/organizations deleted",
+                deleted_count,
+            )
+            return deleted_count
+    except Exception as e:
+        logger.error("Error during unverified signups cleanup job: %s", e, exc_info=True)
+        return 0
+
+
 def start_scheduler() -> None:
     """Initializes and starts the background job scheduler."""
     if not scheduler.running:
@@ -34,8 +55,15 @@ def start_scheduler() -> None:
             id="cleanup_expired_revoked_tokens",
             replace_existing=True,
         )
+        scheduler.add_job(
+            run_cleanup_unverified_signups,
+            "interval",
+            hours=24,
+            id="cleanup_unverified_signups",
+            replace_existing=True,
+        )
         scheduler.start()
-        logger.info("APScheduler started successfully (24h token cleanup interval).")
+        logger.info("APScheduler started successfully (token & signup cleanup intervals).")
 
 
 def shutdown_scheduler() -> None:
