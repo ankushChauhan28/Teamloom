@@ -100,7 +100,7 @@ async def test_organization_cascade_and_relationships(db_session: AsyncSession) 
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
         access_level=3,
-        employee_code="EMP-7701",
+        employee_code="1000007701",
         must_change_password=False,
         organization_id=org.id,
     )
@@ -168,7 +168,7 @@ async def test_create_employee_inherits_admin_organization(
         hashed_password=hash_password("adminpass123"),
         role=UserRole.ADMIN,
         access_level=1,
-        employee_code="EMP-8001",
+        employee_code="1000008001",
         must_change_password=False,
         organization_id=custom_org.id,
     )
@@ -224,7 +224,7 @@ async def test_create_task_inherits_creator_organization(
         hashed_password=hash_password("adminpass123"),
         role=UserRole.ADMIN,
         access_level=1,
-        employee_code="EMP-8005",
+        employee_code="1000008005",
         must_change_password=False,
         organization_id=custom_org.id,
     )
@@ -234,7 +234,7 @@ async def test_create_task_inherits_creator_organization(
         hashed_password=hash_password("emppass123"),
         role=UserRole.EMPLOYEE,
         access_level=3,
-        employee_code="EMP-8006",
+        employee_code="1000008006",
         must_change_password=False,
         organization_id=custom_org.id,
     )
@@ -292,7 +292,7 @@ async def test_create_leave_request_inherits_employee_organization(
         hashed_password=hash_password("emppass123"),
         role=UserRole.EMPLOYEE,
         access_level=3,
-        employee_code="EMP-8010",
+        employee_code="1000008010",
         must_change_password=False,
         organization_id=custom_org.id,
     )

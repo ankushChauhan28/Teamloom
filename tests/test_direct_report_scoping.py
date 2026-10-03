@@ -14,9 +14,9 @@ from app.models.user import User, UserRole
 async def manager_hierarchy(db_session: AsyncSession, test_org: Organization):
     """
     Creates a manager hierarchy fixture:
-    - Manager: EMP-1010 (EMPLOYEE role, manages Report 1)
-    - Report 1: EMP-1011 (EMPLOYEE role, reports_to_id = Manager.id)
-    - Other Employee: EMP-1012 (EMPLOYEE role, reports_to_id = None)
+    - Manager: 1000001010 (EMPLOYEE role, manages Report 1)
+    - Report 1: 1000001011 (EMPLOYEE role, reports_to_id = Manager.id)
+    - Other Employee: 1000001012 (EMPLOYEE role, reports_to_id = None)
     """
     manager = User(
         full_name="Manager Aisha",
@@ -24,7 +24,7 @@ async def manager_hierarchy(db_session: AsyncSession, test_org: Organization):
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
         access_level=2,
-        employee_code="EMP-1010",
+        employee_code="1000001010",
         must_change_password=False,
         organization_id=test_org.id,
     )
@@ -37,7 +37,7 @@ async def manager_hierarchy(db_session: AsyncSession, test_org: Organization):
         email="karan.rpt@example.com",
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
-        employee_code="EMP-1011",
+        employee_code="1000001011",
         reports_to_id=manager.id,
         must_change_password=False,
         organization_id=test_org.id,
@@ -50,7 +50,7 @@ async def manager_hierarchy(db_session: AsyncSession, test_org: Organization):
         hashed_password=hash_password("password123"),
         role=UserRole.EMPLOYEE,
         access_level=4,
-        employee_code="EMP-1012",
+        employee_code="1000001012",
         reports_to_id=None,
         must_change_password=False,
         organization_id=test_org.id,
@@ -89,7 +89,7 @@ async def test_get_my_direct_reports(client: AsyncClient, manager_hierarchy: dic
     data = res.json()
     assert len(data) == 1
     assert data[0]["id"] == report1.id
-    assert data[0]["employee_code"] == "EMP-1011"
+    assert data[0]["employee_code"] == "1000001011"
 
     # Report calls /users/me/reports -> gets empty list []
     res_empty = await client.get("/users/me/reports", headers=report_headers)

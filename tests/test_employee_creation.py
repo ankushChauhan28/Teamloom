@@ -1,7 +1,4 @@
-"""
-Integration & Security Tests for Employee Creation, Employee ID System, and Forced Password Change Flow
-"""
-
+import re
 from unittest.mock import patch
 
 import pytest
@@ -26,7 +23,7 @@ async def test_admin_create_employee_success(
 ) -> None:
     """
     Test Admin can successfully create a new employee with a manager assigned.
-    Verifies employee_code format, must_change_password flag, and absence of plaintext password in response body.
+    Verifies employee_code 10-digit numeric format, must_change_password flag, and absence of plaintext password in response body.
     """
     payload = {
         "full_name": "Alice Employee",
@@ -43,7 +40,7 @@ async def test_admin_create_employee_success(
     assert data["reports_to_id"] == admin_user.id
     assert data["designation"] == "Lead Engineer"
     assert data["role"] == "EMPLOYEE"
-    assert data["employee_code"].startswith("EMP-")
+    assert re.match(r"^[0-9]{10}$", data["employee_code"])
     assert data["must_change_password"] is True
     assert "password" not in data
     assert "temp_password" not in data
@@ -51,21 +48,21 @@ async def test_admin_create_employee_success(
 
 
 @pytest.mark.asyncio
-async def test_employee_code_sequential_generation(
+async def test_employee_code_10_digit_random_generation(
     client: AsyncClient,
     admin_headers: dict[str, str],
 ) -> None:
     """
-    Test that employee_code values are generated sequentially (EMP-1001, EMP-1002, etc.).
+    Test that employee_code values are generated as 10-digit random numeric strings.
     """
     res1 = await client.post(
         "/users/employees",
-        json={"full_name": "Seq User 1", "email": "seq1@example.com"},
+        json={"full_name": "Random User 1", "email": "random1@example.com"},
         headers=admin_headers,
     )
     res2 = await client.post(
         "/users/employees",
-        json={"full_name": "Seq User 2", "email": "seq2@example.com"},
+        json={"full_name": "Random User 2", "email": "random2@example.com"},
         headers=admin_headers,
     )
     assert res1.status_code == status.HTTP_201_CREATED
@@ -74,9 +71,9 @@ async def test_employee_code_sequential_generation(
     code1 = res1.json()["employee_code"]
     code2 = res2.json()["employee_code"]
 
-    num1 = int(code1.split("-")[1])
-    num2 = int(code2.split("-")[1])
-    assert num2 == num1 + 1
+    assert re.match(r"^[0-9]{10}$", code1)
+    assert re.match(r"^[0-9]{10}$", code2)
+    assert code1 != code2
 
 
 @pytest.mark.asyncio
@@ -91,6 +88,24 @@ async def test_duplicate_email_rejected(
     payload = {
         "full_name": "Duplicate Email User",
         "email": employee_user.email,
+    }
+    response = await client.post("/users/employees", json=payload, headers=admin_headers)
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "already exists" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_email_case_insensitive_rejected(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    employee_user: User,
+) -> None:
+    """
+    Test creating an employee with an existing email in different casing returns HTTP 400.
+    """
+    payload = {
+        "full_name": "Duplicate Mixed Case User",
+        "email": employee_user.email.upper(),
     }
     response = await client.post("/users/employees", json=payload, headers=admin_headers)
     assert response.status_code == status.HTTP_400_BAD_REQUEST
@@ -293,7 +308,7 @@ async def test_employee_creation_happy_path(
     """
     Happy-path regression test:
     Confirm an admin can create an employee, receiving HTTP 201 Created and
-    a valid sequential employee_code (EMP-XXXX).
+    a valid 10-digit numeric employee_code.
     """
     response = await client.post(
         "/users/employees",
@@ -309,22 +324,22 @@ async def test_employee_creation_happy_path(
     data = response.json()
     assert data["email"] == "happy.path@example.com"
     assert data["full_name"] == "Happy Path Employee"
-    assert data["employee_code"].startswith("EMP-")
+    assert re.match(r"^[0-9]{10}$", data["employee_code"])
     assert data["role"] == "EMPLOYEE"
 
 
 @pytest.mark.asyncio
-async def test_employee_creation_sequence_desync_skips_collisions(
+async def test_employee_creation_collision_retry_succeeds(
     client: AsyncClient,
     admin_headers: dict[str, str],
     db_session: AsyncSession,
     test_org: Organization,
 ) -> None:
     """
-    Simulate exact sequence desync scenario:
-    The database already contains users with employee_code EMP-1001 and EMP-1002.
-    When the sequence produces colliding codes, create_employee catches IntegrityError,
-    retries, and eventually succeeds when a non-colliding code (EMP-1003) is generated.
+    Simulate code collision scenario:
+    The database already contains a user with employee_code '1234567890'.
+    When the generator produces a colliding code on first attempt, create_employee catches IntegrityError,
+    retries using savepoint, and successfully allocates '9876543210' on the second attempt.
     """
     user1 = User(
         full_name="Pre-existing 1",
@@ -332,36 +347,28 @@ async def test_employee_creation_sequence_desync_skips_collisions(
         hashed_password="hash",
         role=UserRole.EMPLOYEE,
         access_level=3,
-        employee_code="EMP-1001",
+        employee_code="1234567890",
         must_change_password=False,
         organization_id=test_org.id,
     )
-    user2 = User(
-        full_name="Pre-existing 2",
-        email="pre2@example.com",
-        hashed_password="hash",
-        role=UserRole.EMPLOYEE,
-        access_level=3,
-        employee_code="EMP-1002",
-        must_change_password=False,
-        organization_id=test_org.id,
-    )
-    db_session.add_all([user1, user2])
+    db_session.add(user1)
     await db_session.commit()
 
-    from sqlalchemy import text
+    generated_codes = iter(["1234567890", "9876543210"])
 
-    await db_session.execute(text("SELECT setval('employee_code_seq', 1000, true)"))
-
-    response = await client.post(
-        "/users/employees",
-        json={"full_name": "Desync Survivor", "email": "survivor@example.com"},
-        headers=admin_headers,
-    )
-    assert response.status_code == status.HTTP_201_CREATED
-    data = response.json()
-    assert data["employee_code"] == "EMP-1003"
-    assert data["email"] == "survivor@example.com"
+    with patch(
+        "app.services.user_service._generate_next_employee_code",
+        side_effect=lambda *args, **kwargs: next(generated_codes),
+    ):
+        response = await client.post(
+            "/users/employees",
+            json={"full_name": "Collision Survivor", "email": "survivor@example.com"},
+            headers=admin_headers,
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+        data = response.json()
+        assert data["employee_code"] == "9876543210"
+        assert data["email"] == "survivor@example.com"
 
 
 @pytest.mark.asyncio
@@ -372,7 +379,7 @@ async def test_employee_creation_desync_exhausts_retries_returns_clean_app_excep
     test_org: Organization,
 ) -> None:
     """
-    When all 10 retry attempts collide due to severe sequence desync, create_employee()
+    When all 10 retry attempts collide, create_employee()
     must raise a clean AppException with status_code=500 rather than letting a raw
     IntegrityError propagate unhandled.
     """
@@ -382,7 +389,7 @@ async def test_employee_creation_desync_exhausts_retries_returns_clean_app_excep
         hashed_password="hash",
         role=UserRole.EMPLOYEE,
         access_level=3,
-        employee_code="EMP-9999",
+        employee_code="1234567890",
         must_change_password=False,
         organization_id=test_org.id,
     )
@@ -391,7 +398,7 @@ async def test_employee_creation_desync_exhausts_retries_returns_clean_app_excep
 
     with patch(
         "app.services.user_service._generate_next_employee_code",
-        return_value="EMP-9999",
+        return_value="1234567890",
     ):
         response = await client.post(
             "/users/employees",
@@ -419,7 +426,7 @@ async def test_create_employee_service_raises_app_exception_on_exhausted_retries
         hashed_password="hash",
         role=UserRole.EMPLOYEE,
         access_level=3,
-        employee_code="EMP-8888",
+        employee_code="1234567890",
         must_change_password=False,
         organization_id=test_org.id,
     )
@@ -433,13 +440,29 @@ async def test_create_employee_service_raises_app_exception_on_exhausted_retries
 
     with patch(
         "app.services.user_service._generate_next_employee_code",
-        return_value="EMP-8888",
+        return_value="1234567890",
     ):
         with pytest.raises(AppException) as exc_info:
             await create_employee(db_session, emp_in)
 
         assert exc_info.value.status_code == 500
         assert "Failed to generate a unique employee code" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_old_emp_code_rejected_at_login(
+    client: AsyncClient,
+) -> None:
+    """
+    Test that legacy EMP-1001 formatted User IDs are rejected with generic invalid credentials error.
+    """
+    payload = {
+        "employee_code": "EMP-1001",
+        "password": "anypassword123",
+    }
+    response = await client.post("/auth/login", json=payload)
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    assert response.json()["detail"] == "Incorrect employee ID or password."
 
 
 

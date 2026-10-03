@@ -22,6 +22,7 @@ from app.core.security import create_access_token, hash_password
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
+from app.models.email_verification_token import EmailVerificationToken  # noqa: F401
 from app.models.leave import LeaveRequest  # noqa: F401
 from app.models.organization import Organization, OrgStatus  # noqa: F401
 from app.models.revoked_token import RevokedToken  # noqa: F401
@@ -262,7 +263,6 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
     async with test_engine.begin() as conn:
         if table_clause:
             await conn.execute(text(f"TRUNCATE TABLE {table_clause} RESTART IDENTITY CASCADE;"))
-        await conn.execute(text("SELECT setval('employee_code_seq', 1000, true);"))
 
     async with TestingSessionLocal() as session:
         yield session
@@ -311,7 +311,8 @@ async def admin_user(db_session: AsyncSession, test_org: Organization) -> User:
         hashed_password=hash_password("adminpassword123"),
         role=UserRole.ADMIN,
         access_level=1,
-        employee_code="EMP-0001",
+        employee_code="1000000001",
+        is_email_verified=True,
         must_change_password=False,
         organization_id=test_org.id,
     )
@@ -332,7 +333,8 @@ async def employee_user(db_session: AsyncSession, test_org: Organization) -> Use
         hashed_password=hash_password("employeepassword123"),
         role=UserRole.EMPLOYEE,
         access_level=3,
-        employee_code="EMP-0002",
+        employee_code="1000000002",
+        is_email_verified=True,
         must_change_password=False,
         organization_id=test_org.id,
     )
@@ -388,7 +390,8 @@ async def admin_user_b(db_session: AsyncSession, test_org_b: Organization) -> Us
         hashed_password=hash_password("adminorgb123"),
         role=UserRole.ADMIN,
         access_level=1,
-        employee_code="EMP-0010",
+        employee_code="1000000010",
+        is_email_verified=True,
         must_change_password=False,
         organization_id=test_org_b.id,
     )
@@ -409,7 +412,8 @@ async def employee_user_b(db_session: AsyncSession, test_org_b: Organization) ->
         hashed_password=hash_password("emporgb123"),
         role=UserRole.EMPLOYEE,
         access_level=3,
-        employee_code="EMP-0011",
+        employee_code="1000000011",
+        is_email_verified=True,
         must_change_password=False,
         organization_id=test_org_b.id,
     )

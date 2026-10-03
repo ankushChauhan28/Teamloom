@@ -97,8 +97,8 @@ async def test_migration_slice2_backfill_and_reversibility() -> None:
                 )
             )
 
-        # 4. Run Slice 2 migration to head
-        await asyncio.to_thread(command.upgrade, cfg, "head")
+        # 4. Run Slice 2 migration to l2m3n4o5p6q7
+        await asyncio.to_thread(command.upgrade, cfg, "l2m3n4o5p6q7")
 
         # 5. Verify backfill integrity and constraints
         async with temp_engine.connect() as conn:
@@ -167,8 +167,8 @@ async def test_migration_slice2_backfill_and_reversibility() -> None:
             assert t_count == 2
             assert l_count == 2
 
-        # 7. Test Re-upgrade to head
-        await asyncio.to_thread(command.upgrade, cfg, "head")
+        # 7. Test Re-upgrade to l2m3n4o5p6q7
+        await asyncio.to_thread(command.upgrade, cfg, "l2m3n4o5p6q7")
 
         async with temp_engine.connect() as conn:
             re_org_count = (await conn.execute(text("SELECT COUNT(*) FROM organizations"))).scalar()
