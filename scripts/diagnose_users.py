@@ -6,6 +6,7 @@ from sqlalchemy import text, select
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import app.models.email_verification_token  # noqa: F401
 import app.models.leave  # noqa: F401
 import app.models.task   # noqa: F401
 from app.core.security import hash_password
@@ -16,15 +17,16 @@ async def setup_and_diagnose():
     async with AsyncSessionLocal() as db:
         # Seed users if they don't already exist (idempotent check)
         USERS_TO_SEED = [
-            ("admin@example.com", "System Administrator", "EMP-1001", UserRole.ADMIN, 1, "Admin@123"),
-            ("manager@example.com", "Sarah Manager", "EMP-1002", UserRole.EMPLOYEE, 2, "password123"),
-            ("employee@example.com", "Alex Employee", "EMP-1003", UserRole.EMPLOYEE, 4, "password123"),
+            ("admin@example.com", "System Administrator", "1000000001", UserRole.ADMIN, 1, "Admin@123"),
+            ("manager@example.com", "Sarah Manager", "1000000002", UserRole.EMPLOYEE, 2, "password123"),
+            ("employee@example.com", "Alex Employee", "1000000003", UserRole.EMPLOYEE, 4, "password123"),
         ]
 
         print("=== CHECKING SEED USERS (IDEMPOTENT) ===")
         for email, full_name, emp_code, role, tier, pwd in USERS_TO_SEED:
+            norm_email = email.strip().lower()
             result = await db.execute(
-                select(User).where((User.email == email) | (User.employee_code == emp_code))
+                select(User).where((User.email == norm_email) | (User.employee_code == emp_code))
             )
             existing_user = result.scalar_one_or_none()
             if existing_user is not None:
@@ -33,11 +35,12 @@ async def setup_and_diagnose():
 
             new_user = User(
                 full_name=full_name,
-                email=email,
+                email=norm_email,
                 hashed_password=hash_password(pwd),
                 role=role,
                 access_level=tier,
                 employee_code=emp_code,
+                is_email_verified=True,
                 must_change_password=False,
                 is_active=True,
             )
