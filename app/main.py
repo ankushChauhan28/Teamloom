@@ -14,6 +14,7 @@ from app.core.exceptions import (
     UserAlreadyExistsException,
 )
 from app.core.scheduler import shutdown_scheduler, start_scheduler
+from app import models as _models  # noqa: F401 - Register all SQLAlchemy models at startup
 from app.routes import analytics, auth, leaves, tasks, users
 
 
