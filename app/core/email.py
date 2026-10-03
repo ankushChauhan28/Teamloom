@@ -31,7 +31,7 @@ def send_employee_welcome_email(
         <p>Hello {full_name},</p>
         <p>Your account has been created by your administrator.</p>
         <div style="background-color: #f4f6f8; padding: 15px; border-radius: 8px; margin: 15px 0;">
-          <p><strong>Employee Code:</strong> {employee_code}</p>
+          <p><strong>User ID:</strong> {employee_code}</p>
           <p><strong>Email:</strong> {email}</p>
           <p><strong>Temporary Password:</strong> <code>{temp_password}</code></p>
         </div>

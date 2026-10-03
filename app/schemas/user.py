@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
 from app.models.user import UserRole
 
@@ -8,6 +8,13 @@ from app.models.user import UserRole
 class UserBase(BaseModel):
     email: EmailStr
     full_name: str
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v: str) -> str:
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
 
 
 class UserUpdate(BaseModel):
@@ -26,6 +33,13 @@ class EmployeeCreate(BaseModel):
     designation: str | None = None
     access_level: int | None = 3
 
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v: str) -> str:
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
+
 
 class EmployeeCreateResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -40,6 +54,8 @@ class EmployeeCreateResponse(BaseModel):
     designation: str | None = None
     must_change_password: bool
     is_active: bool = True
+    is_email_verified: bool = False
+    email_verified_at: datetime | None = None
     created_at: datetime
     email_sent: bool = False
 
@@ -70,6 +86,13 @@ class TokenData(BaseModel):
     role: UserRole | None = None
     access_level: int | None = None
 
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v: str | None) -> str | None:
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
+
 
 class UserRead(UserBase):
     model_config = ConfigDict(from_attributes=True)
@@ -82,9 +105,33 @@ class UserRead(UserBase):
     reports_to_id: int | None = None
     designation: str | None = None
     employee_code: str | None = None
+    is_email_verified: bool = False
+    email_verified_at: datetime | None = None
     must_change_password: bool = False
     is_active: bool = True
     created_at: datetime
 
 
 UserResponse = UserRead
+
+
+# Email Verification Schemas
+class EmailVerificationRequest(BaseModel):
+    token: str
+
+
+class EmailVerificationResponse(BaseModel):
+    message: str
+    email: EmailStr
+    is_verified: bool
+
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v: str) -> str:
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v

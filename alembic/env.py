@@ -17,6 +17,7 @@ from app.models.leave import LeaveRequest  # noqa: F401
 from app.models.task import Task  # noqa: F401
 
 # Import models to ensure they register on Base.metadata
+from app.models.email_verification_token import EmailVerificationToken  # noqa: F401
 from app.models.organization import Organization  # noqa: F401
 from app.models.revoked_token import RevokedToken  # noqa: F401
 from app.models.user import User  # noqa: F401

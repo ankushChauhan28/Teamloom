@@ -6,7 +6,7 @@ import bcrypt
 import jwt
 from fastapi import Depends
 from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -60,13 +60,14 @@ def create_access_token(email: str, role: str, expires_delta: timedelta | None =
     """
     Generates a short-lived access token.
     """
+    norm_email = email.strip().lower()
     if expires_delta:
         expire = expires_delta
     else:
         expire = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
 
     return create_jwt_token(
-        subject=email,
+        subject=norm_email,
         role=role,
         secret_key=settings.JWT_SECRET_KEY,
         expires_delta=expire,
@@ -78,13 +79,14 @@ def create_refresh_token(email: str, role: str, expires_delta: timedelta | None 
     """
     Generates a long-lived refresh token.
     """
+    norm_email = email.strip().lower()
     if expires_delta:
         expire = expires_delta
     else:
         expire = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
 
     return create_jwt_token(
-        subject=email,
+        subject=norm_email,
         role=role,
         secret_key=settings.JWT_REFRESH_SECRET_KEY,
         expires_delta=expire,
@@ -139,7 +141,8 @@ async def get_current_user(
     if not email:
         raise AuthenticationException("Invalid access token payload.")
 
-    result = await db.execute(select(User).where(User.email == email))
+    norm_email = email.strip().lower()
+    result = await db.execute(select(User).where(func.lower(User.email) == norm_email))
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise AuthenticationException("User not found.")
