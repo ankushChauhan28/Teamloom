@@ -28,17 +28,32 @@ DUMMY_HASH = hash_password("dummy_password_for_constant_time_verification")
 
 async def authenticate_user(db: AsyncSession, login_in: UserLogin) -> User:
     """
-    Authenticates a user by checking employee_code and verifying password.
+    Authenticates a user based on mode:
+    - mode == "admin": look up by lower(trim(identifier)) == lower(users.email) AND access_level == 1.
+    - mode == "employee": look up by users.employee_code == identifier.strip() AND access_level > 1.
     Enforces account lockout: 5 consecutive failed attempts lock the account for 15 minutes.
-    Responses for non-existent employee, wrong password, or locked account are indistinguishable
-    in both HTTP response payload and timing (bcrypt execution runs on all 3 paths).
+    Responses for wrong credentials, wrong mode, non-existent user, or locked account are indistinguishable
+    in both HTTP response payload and timing (bcrypt execution runs on all paths).
     """
-    result = await db.execute(select(User).where(User.employee_code == login_in.employee_code))
+    generic_error = InvalidCredentialsException("Incorrect credentials.")
+
+    if login_in.mode == "admin":
+        norm_identifier = login_in.identifier.strip().lower()
+        stmt = select(User).where(
+            func.lower(User.email) == norm_identifier,
+            User.access_level == 1,
+        )
+    else:
+        norm_identifier = login_in.identifier.strip()
+        stmt = select(User).where(
+            User.employee_code == norm_identifier,
+            User.access_level > 1,
+        )
+
+    result = await db.execute(stmt)
     user = result.scalar_one_or_none()
 
-    generic_error = InvalidCredentialsException("Incorrect employee ID or password.")
-
-    # 1. Non-existent user: run dummy bcrypt & commit to match timing and DB I/O profile
+    # 1. Non-existent user or wrong mode match: run dummy bcrypt & commit to match timing and DB I/O profile
     if not user:
         verify_password(login_in.password, DUMMY_HASH)
         await db.commit()

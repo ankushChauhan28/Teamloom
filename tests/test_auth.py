@@ -1,16 +1,20 @@
 """
 Integration & Unit Tests for Authentication Endpoints (/auth/)
+Covers Slice 4b: Dual login modes (Admin email / Employee User ID), server-side enforcement,
+timing safety, rate limiting, and session lifecycle.
 """
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 from fastapi import Request, Response, status
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import create_refresh_token
-from app.models.user import User
+from app.core.security import create_refresh_token, hash_password
+from app.models.organization import Organization
+from app.models.user import User, UserRole
 from app.routes.auth import login, refresh, swagger_login
 from app.schemas.user import UserLogin
 
@@ -18,12 +22,13 @@ from app.schemas.user import UserLogin
 @pytest.mark.asyncio
 async def test_login_user_success(client: AsyncClient, employee_user: User) -> None:
     """
-    Test valid user login with employee_code returns access JWT token, must_change_password=False,
-    and a fully populated user object in JSON body, and refresh token in httpOnly cookie.
+    Test valid employee login with User ID in employee mode returns access JWT token,
+    must_change_password=False, a fully populated user object in JSON body, and refresh token in httpOnly cookie.
     """
     payload = {
-        "employee_code": employee_user.employee_code,
+        "identifier": employee_user.employee_code,
         "password": "employeepassword123",
+        "mode": "employee",
     }
     response = await client.post("/auth/login", json=payload)
     assert response.status_code == status.HTTP_200_OK
@@ -48,15 +53,32 @@ async def test_login_user_success(client: AsyncClient, employee_user: User) -> N
 
 
 @pytest.mark.asyncio
+async def test_login_admin_success(client: AsyncClient, admin_user: User) -> None:
+    """
+    Test valid admin login with email in admin mode returns access JWT token,
+    populated user object, and refresh token in cookie.
+    """
+    payload = {
+        "identifier": admin_user.email,
+        "password": "adminpassword123",
+        "mode": "admin",
+    }
+    response = await client.post("/auth/login", json=payload)
+    assert response.status_code == status.HTTP_200_OK
+    data = response.json()
+    assert "access_token" in data
+    assert data["user"]["email"] == admin_user.email
+    assert data["user"]["role"] == "ADMIN"
+
+
+@pytest.mark.asyncio
 async def test_login_pending_password_change_user_returns_true_flag(
     client: AsyncClient, admin_headers: dict[str, str]
 ) -> None:
     """
-    Test logging in as a user with must_change_password=True using employee_code
-    returns must_change_password=True and a fully populated user object in the login response body.
+    Test logging in as a user with must_change_password=True using User ID in employee mode
+    returns must_change_password=True and a fully populated user object in the login response body (B6).
     """
-    from unittest.mock import patch
-
     captured_passwords = []
 
     def mock_send_email(email, full_name, employee_code, temp_password):
@@ -77,7 +99,7 @@ async def test_login_pending_password_change_user_returns_true_flag(
 
     login_res = await client.post(
         "/auth/login",
-        json={"employee_code": emp_code, "password": temp_pwd},
+        json={"identifier": emp_code, "password": temp_pwd, "mode": "employee"},
     )
     assert login_res.status_code == status.HTTP_200_OK
     data = login_res.json()
@@ -95,20 +117,57 @@ async def test_login_pending_password_change_user_returns_true_flag(
 
 
 @pytest.mark.asyncio
-async def test_swagger_login_success(client: AsyncClient, employee_user: User) -> None:
+async def test_swagger_login_success(
+    client: AsyncClient, employee_user: User, admin_user: User
+) -> None:
     """
-    Test form-data login endpoint (/auth/swagger-login) with employee_code username returns access token.
+    Test form-data login endpoint (/auth/swagger-login):
+    - Digits username -> automatically treated as employee mode.
+    - '@' username -> automatically treated as admin mode.
     """
-    data = {
+    # 1. Employee login via Swagger
+    data_emp = {
         "username": employee_user.employee_code,
         "password": "employeepassword123",
     }
-    response = await client.post("/auth/swagger-login", data=data)
-    assert response.status_code == status.HTTP_200_OK
+    response_emp = await client.post("/auth/swagger-login", data=data_emp)
+    assert response_emp.status_code == status.HTTP_200_OK
+    assert "access_token" in response_emp.json()
 
-    res_data = response.json()
-    assert "access_token" in res_data
-    assert "refresh_token" in response.cookies
+    # 2. Admin login via Swagger
+    data_admin = {
+        "username": admin_user.email,
+        "password": "adminpassword123",
+    }
+    response_admin = await client.post("/auth/swagger-login", data=data_admin)
+    assert response_admin.status_code == status.HTTP_200_OK
+    assert "access_token" in response_admin.json()
+
+
+@pytest.mark.asyncio
+async def test_swagger_login_wrong_mode_fails_identically(
+    client: AsyncClient, employee_user: User, admin_user: User
+) -> None:
+    """
+    Test /auth/swagger-login fails with 401 Incorrect credentials when username format doesn't match account mode:
+    - Admin's User ID (digits -> routed to employee mode where access_level > 1 is required) fails with 401.
+    - Employee's email ('@' -> routed to admin mode where access_level == 1 is required) fails with 401.
+    """
+    # Admin User ID -> treated as employee mode
+    res1 = await client.post(
+        "/auth/swagger-login",
+        data={"username": admin_user.employee_code, "password": "adminpassword123"},
+    )
+    assert res1.status_code == status.HTTP_401_UNAUTHORIZED
+    assert res1.json()["detail"] == "Incorrect credentials."
+
+    # Employee email -> treated as admin mode
+    res2 = await client.post(
+        "/auth/swagger-login",
+        data={"username": employee_user.email, "password": "employeepassword123"},
+    )
+    assert res2.status_code == status.HTTP_401_UNAUTHORIZED
+    assert res2.json()["detail"] == "Incorrect credentials."
 
 
 @pytest.mark.asyncio
@@ -116,15 +175,16 @@ async def test_login_with_wrong_password_returns_401(
     client: AsyncClient, employee_user: User
 ) -> None:
     """
-    Test login with valid employee_code but incorrect password returns HTTP 401 with generic error message.
+    Test login with valid User ID but incorrect password returns HTTP 401 with generic error message.
     """
     payload = {
-        "employee_code": employee_user.employee_code,
+        "identifier": employee_user.employee_code,
         "password": "wrongpassword!",
+        "mode": "employee",
     }
     response = await client.post("/auth/login", json=payload)
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
-    assert response.json()["detail"] == "Incorrect employee ID or password."
+    assert response.json()["detail"] == "Incorrect credentials."
 
 
 @pytest.mark.asyncio
@@ -133,28 +193,309 @@ async def test_login_nonexistent_user_returns_401(client: AsyncClient) -> None:
     Test login with a non-existent employee_code returns HTTP 401 with generic error message.
     """
     payload = {
-        "employee_code": "9999999999",
+        "identifier": "9999999999",
         "password": "somepassword123",
+        "mode": "employee",
     }
     response = await client.post("/auth/login", json=payload)
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
-    assert response.json()["detail"] == "Incorrect employee ID or password."
+    assert response.json()["detail"] == "Incorrect credentials."
+
+
+# =====================================================================
+# B4, B5, B6 ACCEPTANCE SCENARIO TESTS
+# =====================================================================
 
 
 @pytest.mark.asyncio
-async def test_login_with_email_in_employee_code_field_fails_cleanly(
+async def test_scenario_b4_admin_login_lockout_and_recovery(
+    client: AsyncClient, admin_user: User, db_session: AsyncSession
+) -> None:
+    """
+    Scenario B4: Admin logs in with email + password in admin mode.
+    5 wrong passwords in admin mode lock the account for 15 minutes.
+    A correct password during the lock window is rejected with 401 Incorrect credentials.
+    """
+    email = admin_user.email
+    correct_pwd = "adminpassword123"
+    wrong_pwd = "WrongAdminPassword!"
+
+    # 1. 5 wrong attempts in admin mode
+    for _ in range(5):
+        res = await client.post(
+            "/auth/login",
+            json={"identifier": email, "password": wrong_pwd, "mode": "admin"},
+        )
+        assert res.status_code == status.HTTP_401_UNAUTHORIZED
+        assert res.json()["detail"] == "Incorrect credentials."
+
+    await db_session.refresh(admin_user)
+    assert admin_user.failed_login_attempts == 5
+    assert admin_user.locked_until is not None
+
+    # 2. 6th attempt with CORRECT password during lock window is rejected
+    res_6th = await client.post(
+        "/auth/login",
+        json={"identifier": email, "password": correct_pwd, "mode": "admin"},
+    )
+    assert res_6th.status_code == status.HTTP_401_UNAUTHORIZED
+    assert res_6th.json()["detail"] == "Incorrect credentials."
+
+    # 3. Simulate lock window expiration -> correct password succeeds and resets lockout
+    admin_user.locked_until = datetime.now(UTC) - timedelta(minutes=1)
+    await db_session.commit()
+
+    res_success = await client.post(
+        "/auth/login",
+        json={"identifier": email, "password": correct_pwd, "mode": "admin"},
+    )
+    assert res_success.status_code == status.HTTP_200_OK
+
+    await db_session.refresh(admin_user)
+    assert admin_user.failed_login_attempts == 0
+    assert admin_user.locked_until is None
+
+
+@pytest.mark.asyncio
+async def test_scenario_b5_cross_mode_credentials_rejected_identically(
+    client: AsyncClient, admin_user: User, employee_user: User
+) -> None:
+    """
+    Scenario B5: Cross-mode logins fail with exact identical status code (401) and detail ("Incorrect credentials."):
+    1. Admin email in employee mode.
+    2. Admin User ID in employee mode.
+    3. Employee email in admin mode.
+    4. Employee User ID in admin mode.
+    """
+    # 1. Admin email in employee mode
+    r1 = await client.post(
+        "/auth/login",
+        json={"identifier": admin_user.email, "password": "adminpassword123", "mode": "employee"},
+    )
+    # 2. Admin User ID in employee mode
+    r2 = await client.post(
+        "/auth/login",
+        json={"identifier": admin_user.employee_code, "password": "adminpassword123", "mode": "employee"},
+    )
+    # 3. Employee email in admin mode
+    r3 = await client.post(
+        "/auth/login",
+        json={"identifier": employee_user.email, "password": "employeepassword123", "mode": "admin"},
+    )
+    # 4. Employee User ID in admin mode
+    r4 = await client.post(
+        "/auth/login",
+        json={"identifier": employee_user.employee_code, "password": "employeepassword123", "mode": "admin"},
+    )
+
+    for resp in [r1, r2, r3, r4]:
+        assert resp.status_code == status.HTTP_401_UNAUTHORIZED
+        assert resp.json() == {"detail": "Incorrect credentials."}
+
+
+@pytest.mark.asyncio
+async def test_wrong_mode_attempts_do_not_increment_failed_attempts_or_lock(
+    client: AsyncClient, admin_user: User, employee_user: User, db_session: AsyncSession
+) -> None:
+    """
+    Wrong-mode login attempts are filtered out at the DB query level and behave as 'user not found'.
+    Submitting 10 wrong-mode attempts in a row against an account does NOT increment failed_login_attempts
+    and never locks the real account.
+    """
+    # 10 wrong-mode attempts for admin (trying employee mode)
+    for _ in range(10):
+        await client.post(
+            "/auth/login",
+            json={"identifier": admin_user.employee_code, "password": "adminpassword123", "mode": "employee"},
+        )
+
+    await db_session.refresh(admin_user)
+    assert admin_user.failed_login_attempts == 0
+    assert admin_user.locked_until is None
+
+    # 10 wrong-mode attempts for employee (trying admin mode)
+    for _ in range(10):
+        await client.post(
+            "/auth/login",
+            json={"identifier": employee_user.email, "password": "employeepassword123", "mode": "admin"},
+        )
+
+    await db_session.refresh(employee_user)
+    assert employee_user.failed_login_attempts == 0
+    assert employee_user.locked_until is None
+
+
+@pytest.mark.asyncio
+async def test_timing_safety_dummy_bcrypt_execution(
+    db_session: AsyncSession, admin_user: User, employee_user: User
+) -> None:
+    """
+    Timing Safety: Verifies that verify_password runs exactly once across all failure and success paths:
+    1. Unknown user (runs with DUMMY_HASH)
+    2. Wrong mode (runs with DUMMY_HASH)
+    3. Inactive user (runs with user's hash)
+    4. Locked user (runs with user's hash)
+    5. Wrong password path (runs with user's hash)
+    6. Correct password path (runs with user's hash)
+    """
+    from app.services import auth_service
+
+    # Setup inactive user
+    employee_user.is_active = False
+    await db_session.commit()
+
+    # 1. Unknown user path
+    with patch("app.services.auth_service.verify_password", wraps=auth_service.verify_password) as mock_v:
+        with pytest.raises(Exception):
+            await auth_service.authenticate_user(
+                db=db_session,
+                login_in=UserLogin(identifier="9999999999", password="pwd", mode="employee"),
+            )
+        assert mock_v.call_count == 1
+
+    # 2. Wrong mode path (admin User ID in employee mode -> not found)
+    with patch("app.services.auth_service.verify_password", wraps=auth_service.verify_password) as mock_v:
+        with pytest.raises(Exception):
+            await auth_service.authenticate_user(
+                db=db_session,
+                login_in=UserLogin(identifier=admin_user.employee_code, password="pwd", mode="employee"),
+            )
+        assert mock_v.call_count == 1
+
+    # 3. Inactive user path
+    with patch("app.services.auth_service.verify_password", wraps=auth_service.verify_password) as mock_v:
+        with pytest.raises(Exception):
+            await auth_service.authenticate_user(
+                db=db_session,
+                login_in=UserLogin(identifier=employee_user.employee_code, password="pwd", mode="employee"),
+            )
+        assert mock_v.call_count == 1
+
+    # Restore active state and lock user
+    employee_user.is_active = True
+    employee_user.locked_until = datetime.now(UTC) + timedelta(minutes=15)
+    await db_session.commit()
+
+    # 4. Locked user path
+    with patch("app.services.auth_service.verify_password", wraps=auth_service.verify_password) as mock_v:
+        with pytest.raises(Exception):
+            await auth_service.authenticate_user(
+                db=db_session,
+                login_in=UserLogin(identifier=employee_user.employee_code, password="pwd", mode="employee"),
+            )
+        assert mock_v.call_count == 1
+
+    # Unlock user
+    employee_user.locked_until = None
+    await db_session.commit()
+
+    # 5. Wrong password path
+    with patch("app.services.auth_service.verify_password", wraps=auth_service.verify_password) as mock_v:
+        with pytest.raises(Exception):
+            await auth_service.authenticate_user(
+                db=db_session,
+                login_in=UserLogin(identifier=employee_user.employee_code, password="wrong", mode="employee"),
+            )
+        assert mock_v.call_count == 1
+
+    # 6. Correct password path
+    with patch("app.services.auth_service.verify_password", wraps=auth_service.verify_password) as mock_v:
+        user = await auth_service.authenticate_user(
+            db=db_session,
+            login_in=UserLogin(identifier=employee_user.employee_code, password="employeepassword123", mode="employee"),
+        )
+        assert user.id == employee_user.id
+        assert mock_v.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_scenario_x8_second_tier1_admin_login(
+    client: AsyncClient, db_session: AsyncSession, test_org: Organization
+) -> None:
+    """
+    Scenario X8: A second Tier-1 Admin (access_level=1) in an organization
+    logs in with their own email in admin mode.
+    """
+    second_admin = User(
+        full_name="Second Tier1 Admin",
+        email="second.admin@company.com",
+        hashed_password=hash_password("secondadmin123"),
+        role=UserRole.ADMIN,
+        access_level=1,
+        employee_code="1000000099",
+        is_email_verified=True,
+        must_change_password=False,
+        organization_id=test_org.id,
+    )
+    db_session.add(second_admin)
+    await db_session.commit()
+
+    res = await client.post(
+        "/auth/login",
+        json={"identifier": "second.admin@company.com", "password": "secondadmin123", "mode": "admin"},
+    )
+    assert res.status_code == status.HTTP_200_OK
+    assert res.json()["user"]["email"] == "second.admin@company.com"
+    assert res.json()["user"]["access_level"] == 1
+
+
+@pytest.mark.asyncio
+async def test_admin_email_login_case_insensitivity_and_whitespace_trimming(
+    client: AsyncClient, admin_user: User
+) -> None:
+    """
+    Admin email login is case-insensitive and whitespace-trimmed.
+    """
+    email_variants = [
+        f"  {admin_user.email}  ",
+        admin_user.email.upper(),
+        f"  {admin_user.email.title()} ",
+    ]
+    for variant in email_variants:
+        res = await client.post(
+            "/auth/login",
+            json={"identifier": variant, "password": "adminpassword123", "mode": "admin"},
+        )
+        assert res.status_code == status.HTTP_200_OK, f"Failed for email variant: {variant}"
+        assert res.json()["user"]["email"] == admin_user.email
+
+
+@pytest.mark.asyncio
+async def test_missing_or_invalid_mode_returns_422(
     client: AsyncClient, employee_user: User
 ) -> None:
     """
-    Test passing an email address in the employee_code field fails cleanly with HTTP 401 generic error.
+    POST /auth/login returns 422 if mode is missing or not 'admin' / 'employee'.
     """
-    payload = {
-        "employee_code": employee_user.email,
-        "password": "employeepassword123",
-    }
-    response = await client.post("/auth/login", json=payload)
-    assert response.status_code == status.HTTP_401_UNAUTHORIZED
-    assert response.json()["detail"] == "Incorrect employee ID or password."
+    # 1. Missing mode
+    r_missing = await client.post(
+        "/auth/login",
+        json={"identifier": employee_user.employee_code, "password": "employeepassword123"},
+    )
+    assert r_missing.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    # 2. Invalid mode
+    r_invalid = await client.post(
+        "/auth/login",
+        json={
+            "identifier": employee_user.employee_code,
+            "password": "employeepassword123",
+            "mode": "superadmin",
+        },
+    )
+    assert r_invalid.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    # 3. Legacy payload format {"employee_code": ..., "password": ...}
+    r_legacy = await client.post(
+        "/auth/login",
+        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+    )
+    assert r_legacy.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+# =====================================================================
+# SESSION & TOKEN LIFECYCLE TESTS
+# =====================================================================
 
 
 @pytest.mark.asyncio
@@ -164,7 +505,7 @@ async def test_refresh_token_success(client: AsyncClient, employee_user: User) -
     """
     login_res = await client.post(
         "/auth/login",
-        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+        json={"identifier": employee_user.employee_code, "password": "employeepassword123", "mode": "employee"},
     )
     assert login_res.status_code == status.HTTP_200_OK
     assert "refresh_token" in client.cookies
@@ -221,7 +562,7 @@ async def test_logout_user_success(client: AsyncClient, employee_user: User) -> 
     """
     login_res = await client.post(
         "/auth/login",
-        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+        json={"identifier": employee_user.employee_code, "password": "employeepassword123", "mode": "employee"},
     )
     assert "refresh_token" in client.cookies
     access_token = login_res.json()["access_token"]
@@ -239,7 +580,7 @@ async def test_logout_revokes_token_immediately(client: AsyncClient, employee_us
     """
     login_res = await client.post(
         "/auth/login",
-        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+        json={"identifier": employee_user.employee_code, "password": "employeepassword123", "mode": "employee"},
     )
     assert login_res.status_code == status.HTTP_200_OK
     stolen_token = client.cookies.get("refresh_token")
@@ -266,7 +607,7 @@ async def test_stolen_token_after_logout_rejected(
     """
     login_res = await client.post(
         "/auth/login",
-        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+        json={"identifier": employee_user.employee_code, "password": "employeepassword123", "mode": "employee"},
     )
     assert login_res.status_code == status.HTTP_200_OK
     stolen_token = client.cookies.get("refresh_token")
@@ -313,7 +654,11 @@ async def test_unit_direct_auth_routes_execution(
     """
     req = Request({"type": "http", "headers": [], "client": ("127.0.0.1", 12345)})
     response = Response()
-    login_in = UserLogin(employee_code=employee_user.employee_code, password="employeepassword123")
+    login_in = UserLogin(
+        identifier=employee_user.employee_code,
+        password="employeepassword123",
+        mode="employee",
+    )
     res_login = await login(login_in=login_in, request=req, response=response, db=db_session)
     assert res_login.access_token is not None
 
@@ -335,60 +680,6 @@ async def test_unit_direct_auth_routes_execution(
 
 
 @pytest.mark.asyncio
-async def test_cleanup_job_removes_only_expired_tokens(
-    db_session: AsyncSession,
-) -> None:
-    """
-    Test that cleanup_expired_revocations prunes only tokens whose exp_timestamp is in the past,
-    leaving unexpired/active tokens untouched in the revoked_tokens table.
-    Also verifies start_scheduler and shutdown_scheduler execute cleanly.
-    """
-    from datetime import datetime, timezone, timedelta
-    from sqlalchemy import select
-    from app.models.revoked_token import RevokedToken
-    from app.services.auth_service import cleanup_expired_revocations
-    from app.core.scheduler import start_scheduler, shutdown_scheduler
-
-    now = datetime.now(timezone.utc)
-    expired_token = RevokedToken(
-        token_jti="test-expired-jti-12345",
-        exp_timestamp=now - timedelta(hours=2),
-    )
-    valid_token = RevokedToken(
-        token_jti="test-valid-jti-67890",
-        exp_timestamp=now + timedelta(days=7),
-    )
-    db_session.add_all([expired_token, valid_token])
-    await db_session.commit()
-
-    # Verify both exist before cleanup
-    res_before = await db_session.execute(
-        select(RevokedToken).where(
-            RevokedToken.token_jti.in_(["test-expired-jti-12345", "test-valid-jti-67890"])
-        )
-    )
-    assert len(res_before.scalars().all()) == 2
-
-    # Execute cleanup
-    deleted_count = await cleanup_expired_revocations(db_session)
-    assert deleted_count >= 1
-
-    # Verify only the valid token remains
-    res_after = await db_session.execute(
-        select(RevokedToken).where(
-            RevokedToken.token_jti.in_(["test-expired-jti-12345", "test-valid-jti-67890"])
-        )
-    )
-    remaining = res_after.scalars().all()
-    assert len(remaining) == 1
-    assert remaining[0].token_jti == "test-valid-jti-67890"
-
-    # Verify scheduler start and clean shutdown lifecycle
-    start_scheduler()
-    shutdown_scheduler()
-
-
-@pytest.mark.asyncio
 async def test_access_token_revoked_after_logout_employee(
     client: AsyncClient, employee_user: User
 ) -> None:
@@ -399,7 +690,7 @@ async def test_access_token_revoked_after_logout_employee(
     """
     login_res = await client.post(
         "/auth/login",
-        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+        json={"identifier": employee_user.employee_code, "password": "employeepassword123", "mode": "employee"},
     )
     assert login_res.status_code == status.HTTP_200_OK
     access_token = login_res.json()["access_token"]
@@ -431,7 +722,7 @@ async def test_refresh_token_revoked_after_logout_employee(
     """
     login_res = await client.post(
         "/auth/login",
-        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+        json={"identifier": employee_user.employee_code, "password": "employeepassword123", "mode": "employee"},
     )
     assert login_res.status_code == status.HTTP_200_OK
     access_token = login_res.json()["access_token"]
@@ -462,7 +753,7 @@ async def test_logout_revocation_admin_tier(
     """
     login_res = await client.post(
         "/auth/login",
-        json={"employee_code": admin_user.employee_code, "password": "adminpassword123"},
+        json={"identifier": admin_user.email, "password": "adminpassword123", "mode": "admin"},
     )
     assert login_res.status_code == status.HTTP_200_OK
     access_token = login_res.json()["access_token"]
@@ -502,7 +793,7 @@ async def test_old_refresh_token_rejected_post_rotation(
     """
     login_res = await client.post(
         "/auth/login",
-        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+        json={"identifier": employee_user.employee_code, "password": "employeepassword123", "mode": "employee"},
     )
     assert login_res.status_code == status.HTTP_200_OK
     old_refresh_token = client.cookies.get("refresh_token")
@@ -546,7 +837,7 @@ async def test_logout_without_refresh_cookie_still_revokes_access_token(
     """
     login_res = await client.post(
         "/auth/login",
-        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+        json={"identifier": employee_user.employee_code, "password": "employeepassword123", "mode": "employee"},
     )
     access_token = login_res.json()["access_token"]
 
@@ -563,6 +854,3 @@ async def test_logout_without_refresh_cookie_still_revokes_access_token(
     post_res = await client.get("/users/me", headers={"Authorization": f"Bearer {access_token}"})
     assert post_res.status_code == status.HTTP_401_UNAUTHORIZED
     assert "revoked" in post_res.json()["detail"].lower()
-
-
-

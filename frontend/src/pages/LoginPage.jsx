@@ -12,7 +12,8 @@ export function LoginPage() {
   const navigate = useNavigate();
   const { login, user, isAuthenticated } = useAuthStore();
 
-  const [employeeCode, setEmployeeCode] = useState('');
+  const [mode, setMode] = useState('admin');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
 
   const [errors, setErrors] = useState({});
@@ -31,10 +32,19 @@ export function LoginPage() {
     }
   }, [isAuthenticated, user, navigate]);
 
+  const handleModeChange = (newMode) => {
+    if (newMode !== mode) {
+      setMode(newMode);
+      setIdentifier('');
+      setErrors({});
+      setServerError('');
+    }
+  };
+
   const validate = () => {
     const newErrors = {};
-    if (!employeeCode.trim()) {
-      newErrors.employeeCode = 'User ID is required.';
+    if (!identifier.trim()) {
+      newErrors.identifier = mode === 'admin' ? 'Email is required.' : 'User ID is required.';
     }
 
     if (!password) {
@@ -53,7 +63,7 @@ export function LoginPage() {
 
     setIsSubmitting(true);
     try {
-      const userData = await login(employeeCode.trim(), password);
+      const userData = await login(identifier.trim(), password, mode);
       if (userData?.must_change_password) {
         navigate('/change-password', { replace: true });
       } else {
@@ -61,9 +71,15 @@ export function LoginPage() {
         navigate(targetPath, { replace: true });
       }
     } catch (err) {
-      const msg =
-        err.response?.data?.detail || 'Incorrect employee ID or password.';
-      setServerError(msg);
+      if (err.response?.status === 401) {
+        setServerError('Incorrect credentials.');
+      } else if (err.response?.status === 429) {
+        setServerError(
+          err.response?.data?.detail || 'Too many login attempts. Please try again later.'
+        );
+      } else {
+        setServerError('Server error. Please try again.');
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -83,13 +99,49 @@ export function LoginPage() {
 
       {/* Login Card */}
       <Card className="w-full max-w-md p-6">
-        <div className="mb-6">
+        <div className="mb-5">
           <h1 className="text-xl font-semibold text-[var(--text-primary)] mb-1">
             Login to your account
           </h1>
           <p className="text-xs text-[var(--text-secondary)]">
             Enter your credentials to access your dashboard
           </p>
+        </div>
+
+        {/* Mode Toggle */}
+        <div
+          className="flex rounded-lg bg-[var(--surface-2)] p-1 mb-5 border border-[var(--border-subtle)]"
+          role="tablist"
+          aria-label="Login Mode"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'admin'}
+            onClick={() => handleModeChange('admin')}
+            disabled={isSubmitting}
+            className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all duration-150 cursor-pointer ${
+              mode === 'admin'
+                ? 'bg-[var(--surface-1)] text-[var(--text-primary)] shadow-sm border border-[var(--border-strong)]'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-transparent'
+            }`}
+          >
+            Login as Admin
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'employee'}
+            onClick={() => handleModeChange('employee')}
+            disabled={isSubmitting}
+            className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all duration-150 cursor-pointer ${
+              mode === 'employee'
+                ? 'bg-[var(--surface-1)] text-[var(--text-primary)] shadow-sm border border-[var(--border-strong)]'
+                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] border border-transparent'
+            }`}
+          >
+            Login as Employee
+          </button>
         </div>
 
         {serverError && (
@@ -99,20 +151,38 @@ export function LoginPage() {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-          <Input
-            label="User ID"
-            type="text"
-            inputMode="numeric"
-            placeholder="1000000001"
-            value={employeeCode}
-            onChange={(e) => {
-              setEmployeeCode(e.target.value);
-              if (errors.employeeCode) setErrors({ ...errors, employeeCode: '' });
-            }}
-            error={errors.employeeCode}
-            disabled={isSubmitting}
-            autoComplete="username"
-          />
+          {mode === 'admin' ? (
+            <Input
+              key="admin-email"
+              label="Email"
+              type="email"
+              placeholder="admin@example.com"
+              value={identifier}
+              onChange={(e) => {
+                setIdentifier(e.target.value);
+                if (errors.identifier) setErrors({ ...errors, identifier: '' });
+              }}
+              error={errors.identifier}
+              disabled={isSubmitting}
+              autoComplete="username"
+            />
+          ) : (
+            <Input
+              key="employee-user-id"
+              label="User ID"
+              type="text"
+              inputMode="numeric"
+              placeholder="1000000001"
+              value={identifier}
+              onChange={(e) => {
+                setIdentifier(e.target.value);
+                if (errors.identifier) setErrors({ ...errors, identifier: '' });
+              }}
+              error={errors.identifier}
+              disabled={isSubmitting}
+              autoComplete="username"
+            />
+          )}
 
           <Input
             label="Password"

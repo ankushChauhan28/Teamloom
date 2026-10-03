@@ -39,10 +39,10 @@ async def test_account_lockout_after_five_failed_attempts(
     for i in range(5):
         res = await client.post(
             "/auth/login",
-            json={"employee_code": code, "password": wrong_pwd},
+            json={"identifier": code, "password": wrong_pwd, "mode": "employee"},
         )
         assert res.status_code == status.HTTP_401_UNAUTHORIZED
-        assert res.json()["detail"] == "Incorrect employee ID or password."
+        assert res.json()["detail"] == "Incorrect credentials."
 
     # Refresh db instance
     await db_session.refresh(employee_user)
@@ -52,11 +52,11 @@ async def test_account_lockout_after_five_failed_attempts(
     # 2. 6th attempt with CORRECT password fails because account is locked
     res_6th = await client.post(
         "/auth/login",
-        json={"employee_code": code, "password": correct_pwd},
+        json={"identifier": code, "password": correct_pwd, "mode": "employee"},
     )
     assert res_6th.status_code == status.HTTP_401_UNAUTHORIZED
     # Response must be completely indistinguishable from invalid credentials
-    assert res_6th.json()["detail"] == "Incorrect employee ID or password."
+    assert res_6th.json()["detail"] == "Incorrect credentials."
 
 
 @pytest.mark.asyncio
@@ -80,7 +80,7 @@ async def test_account_unlocks_after_lockout_window_passes(
     # Attempt login with correct password
     res = await client.post(
         "/auth/login",
-        json={"employee_code": code, "password": correct_pwd},
+        json={"identifier": code, "password": correct_pwd, "mode": "employee"},
     )
     assert res.status_code == status.HTTP_200_OK
     assert "access_token" in res.json()
@@ -107,7 +107,7 @@ async def test_successful_login_resets_failed_attempt_counter(
     for _ in range(3):
         await client.post(
             "/auth/login",
-            json={"employee_code": code, "password": "WrongPassword!"},
+            json={"identifier": code, "password": "WrongPassword!", "mode": "employee"},
         )
 
     await db_session.refresh(employee_user)
@@ -116,7 +116,7 @@ async def test_successful_login_resets_failed_attempt_counter(
     # Successful login
     res = await client.post(
         "/auth/login",
-        json={"employee_code": code, "password": correct_pwd},
+        json={"identifier": code, "password": correct_pwd, "mode": "employee"},
     )
     assert res.status_code == status.HTTP_200_OK
 
@@ -137,13 +137,13 @@ async def test_indistinguishable_locked_versus_invalid_credentials_responses(
     # 1. Non-existent employee ID
     res_nonexistent = await client.post(
         "/auth/login",
-        json={"employee_code": "9999999999", "password": "AnyPassword!"},
+        json={"identifier": "9999999999", "password": "AnyPassword!", "mode": "employee"},
     )
 
     # 2. Invalid password
     res_wrong_pwd = await client.post(
         "/auth/login",
-        json={"employee_code": employee_user.employee_code, "password": "WrongPassword!"},
+        json={"identifier": employee_user.employee_code, "password": "WrongPassword!", "mode": "employee"},
     )
 
     # 3. Lock user
@@ -153,7 +153,7 @@ async def test_indistinguishable_locked_versus_invalid_credentials_responses(
 
     res_locked = await client.post(
         "/auth/login",
-        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+        json={"identifier": employee_user.employee_code, "password": "employeepassword123", "mode": "employee"},
     )
 
     # All 3 responses must be identical
@@ -162,7 +162,7 @@ async def test_indistinguishable_locked_versus_invalid_credentials_responses(
     assert res_locked.status_code == status.HTTP_401_UNAUTHORIZED
 
     assert res_nonexistent.json() == res_wrong_pwd.json() == res_locked.json()
-    assert res_locked.json()["detail"] == "Incorrect employee ID or password."
+    assert res_locked.json()["detail"] == "Incorrect credentials."
 
 
 @pytest.mark.asyncio
@@ -180,7 +180,7 @@ async def test_ip_rate_limiting_exceeded_returns_429(
     for i in range(10):
         res = await client.post(
             "/auth/login",
-            json={"employee_code": f"900000000{i}", "password": "InvalidPassword!"},
+            json={"identifier": f"900000000{i}", "password": "InvalidPassword!", "mode": "employee"},
             headers=headers,
         )
         assert res.status_code != status.HTTP_429_TOO_MANY_REQUESTS
@@ -188,7 +188,7 @@ async def test_ip_rate_limiting_exceeded_returns_429(
     # 11th request from same IP -> 429 Too Many Requests
     res_11th = await client.post(
         "/auth/login",
-        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+        json={"identifier": employee_user.employee_code, "password": "employeepassword123", "mode": "employee"},
         headers=headers,
     )
     assert res_11th.status_code == status.HTTP_429_TOO_MANY_REQUESTS
@@ -214,7 +214,7 @@ async def test_successful_logins_count_towards_ip_rate_limit(
     for _ in range(10):
         res = await client.post(
             "/auth/login",
-            json={"employee_code": code, "password": pwd},
+            json={"identifier": code, "password": pwd, "mode": "employee"},
             headers=headers,
         )
         assert res.status_code == status.HTTP_200_OK
@@ -222,7 +222,7 @@ async def test_successful_logins_count_towards_ip_rate_limit(
     # 11th successful login request from same IP is rate limited
     res_11th = await client.post(
         "/auth/login",
-        json={"employee_code": code, "password": pwd},
+        json={"identifier": code, "password": pwd, "mode": "employee"},
         headers=headers,
     )
     assert res_11th.status_code == status.HTTP_429_TOO_MANY_REQUESTS
@@ -241,7 +241,7 @@ async def test_fresh_user_with_correct_credentials_logs_in_successfully(
     """
     res = await client.post(
         "/auth/login",
-        json={"employee_code": employee_user.employee_code, "password": "employeepassword123"},
+        json={"identifier": employee_user.employee_code, "password": "employeepassword123", "mode": "employee"},
     )
     assert res.status_code == status.HTTP_200_OK
     data = res.json()
@@ -268,7 +268,7 @@ async def test_rate_limit_ignores_spoofed_header_without_trusted_proxy(
     for i in range(10):
         res = await client.post(
             "/auth/login",
-            json={"employee_code": f"900000000{i}", "password": "WrongPassword!"},
+            json={"identifier": f"900000000{i}", "password": "WrongPassword!", "mode": "employee"},
             headers={"X-Forwarded-For": f"198.51.100.{i}"},
         )
         assert res.status_code != status.HTTP_429_TOO_MANY_REQUESTS
@@ -276,7 +276,7 @@ async def test_rate_limit_ignores_spoofed_header_without_trusted_proxy(
     # 11th request with yet another spoofed IP must still be blocked with 429
     res_11th = await client.post(
         "/auth/login",
-        json={"employee_code": employee_user.employee_code, "password": "WrongPassword!"},
+        json={"identifier": employee_user.employee_code, "password": "WrongPassword!", "mode": "employee"},
         headers={"X-Forwarded-For": "198.51.100.254"},
     )
     assert res_11th.status_code == status.HTTP_429_TOO_MANY_REQUESTS
@@ -304,7 +304,7 @@ async def test_rate_limit_uses_forwarded_header_when_proxy_trusted(
     for i in range(10):
         res = await client.post(
             "/auth/login",
-            json={"employee_code": f"800000000{i}", "password": "WrongPassword!"},
+            json={"identifier": f"800000000{i}", "password": "WrongPassword!", "mode": "employee"},
             headers={"X-Forwarded-For": f"{client_ip_a}, 127.0.0.1"},
         )
         assert res.status_code != status.HTTP_429_TOO_MANY_REQUESTS
@@ -312,7 +312,7 @@ async def test_rate_limit_uses_forwarded_header_when_proxy_trusted(
     # 11th request from client A hits 429
     res_a_blocked = await client.post(
         "/auth/login",
-        json={"employee_code": employee_user.employee_code, "password": "WrongPassword!"},
+        json={"identifier": employee_user.employee_code, "password": "WrongPassword!", "mode": "employee"},
         headers={"X-Forwarded-For": client_ip_a},
     )
     assert res_a_blocked.status_code == status.HTTP_429_TOO_MANY_REQUESTS
@@ -320,7 +320,7 @@ async def test_rate_limit_uses_forwarded_header_when_proxy_trusted(
     # Request from client B behind same proxy is NOT blocked
     res_b_allowed = await client.post(
         "/auth/login",
-        json={"employee_code": employee_user.employee_code, "password": "WrongPassword!"},
+        json={"identifier": employee_user.employee_code, "password": "WrongPassword!", "mode": "employee"},
         headers={"X-Forwarded-For": client_ip_b},
     )
     assert res_b_allowed.status_code != status.HTTP_429_TOO_MANY_REQUESTS

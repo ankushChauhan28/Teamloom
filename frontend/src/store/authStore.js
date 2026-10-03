@@ -37,9 +37,9 @@ export const useAuthStore = create((set, get) => ({
     }
   },
 
-  login: async (employeeCode, password) => {
+  login: async (identifier, password, mode) => {
     // 1. Authenticate credentials
-    const loginRes = await api.post('/auth/login', { employee_code: employeeCode, password });
+    const loginRes = await api.post('/auth/login', { identifier, password, mode });
     const { access_token, must_change_password, user: loginUser } = loginRes.data;
 
     // 2. Set token in memory temporarily so subsequent calls read it
@@ -53,7 +53,7 @@ export const useAuthStore = create((set, get) => ({
         userData = userRes.data;
       } catch (err) {
         if (err.response?.data?.detail === 'password_change_required' || must_change_password) {
-          userData = { employee_code: employeeCode, must_change_password: true };
+          userData = { employee_code: identifier, must_change_password: true };
         } else {
           throw err;
         }

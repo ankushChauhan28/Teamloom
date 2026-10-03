@@ -35,7 +35,9 @@ async def test_unit_authenticate_user_wrong_password_raises_exception(
     """
     Unit Test: Authenticating with incorrect password raises `InvalidCredentialsException`.
     """
-    login_in = UserLogin(employee_code=employee_user.employee_code, password="wrongpassword!")
+    login_in = UserLogin(
+        identifier=employee_user.employee_code, password="wrongpassword!", mode="employee"
+    )
     with pytest.raises(InvalidCredentialsException):
         await auth_service.authenticate_user(db=db_session, login_in=login_in)
 
@@ -47,7 +49,7 @@ async def test_unit_authenticate_user_nonexistent_user_raises_exception(
     """
     Unit Test: Authenticating non-existent employee_code runs constant-time dummy bcrypt and raises `InvalidCredentialsException`.
     """
-    login_in = UserLogin(employee_code="9999999999", password="anypassword!")
+    login_in = UserLogin(identifier="9999999999", password="anypassword!", mode="employee")
     with pytest.raises(InvalidCredentialsException):
         await auth_service.authenticate_user(db=db_session, login_in=login_in)
 
@@ -64,7 +66,11 @@ async def test_unit_authenticate_user_locked_account_raises_exception(
     employee_user.locked_until = datetime.now(UTC) + timedelta(minutes=15)
     await db_session.commit()
 
-    login_in = UserLogin(employee_code=employee_user.employee_code, password="employeepassword123")
+    login_in = UserLogin(
+        identifier=employee_user.employee_code,
+        password="employeepassword123",
+        mode="employee",
+    )
     with pytest.raises(InvalidCredentialsException):
         await auth_service.authenticate_user(db=db_session, login_in=login_in)
 
@@ -124,7 +130,9 @@ async def test_unit_authenticate_user_lockout_transition_and_reset(
     """
     Unit Test: 5th failed attempt sets locked_until, and subsequent successful login clears failed attempts and locked_until.
     """
-    login_fail = UserLogin(employee_code=employee_user.employee_code, password="WrongPassword!")
+    login_fail = UserLogin(
+        identifier=employee_user.employee_code, password="WrongPassword!", mode="employee"
+    )
 
     # 4 failed attempts
     for _ in range(4):
@@ -146,7 +154,9 @@ async def test_unit_authenticate_user_lockout_transition_and_reset(
     await db_session.commit()
 
     login_success = UserLogin(
-        employee_code=employee_user.employee_code, password="employeepassword123"
+        identifier=employee_user.employee_code,
+        password="employeepassword123",
+        mode="employee",
     )
     user = await auth_service.authenticate_user(db=db_session, login_in=login_success)
     assert user.failed_login_attempts == 0

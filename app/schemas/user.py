@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
@@ -66,8 +67,9 @@ class PasswordChange(BaseModel):
 
 
 class UserLogin(BaseModel):
-    employee_code: str
+    identifier: str
     password: str
+    mode: Literal["admin", "employee"]
 
 
 class Token(BaseModel):

@@ -16,8 +16,8 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 | 1 | Test infrastructure on PostgreSQL (Docker for dev, CI) | Done | 2026-10-01 | Merged to main (PR #1), PostgreSQL test suite on Docker & GitHub Actions CI, safety guard against prod DB, 151 tests passing |
 | 2 | Organization model, migration, backfill into the default organization | Done | 2026-10-02 | merged to main, CI green (run #6), dev DB migrated to revision l2m3n4o5p6q7, 158 tests passing |
 | 3 | Org scoping on all queries + pagination | Done | 2026-10-02 | Tenant-scoped all queries/aggregates/ID lookups (404 on cross-tenant), single-query window pagination with X-Total-Count header, CORS expose_headers, fetchAllEmployees helper, 175 tests passing, merged to main, CI green (run #10) |
-| 4a | DB cleanup: 10-digit numeric User IDs (no `EMP-`), email verification fields, regenerate IDs of the 6 dummy users | Pending | | |
-| 4b | Login modes: Admin (email) and Employee (User ID), server-enforced (X3) | Pending | | |
+| 4a | DB cleanup: 10-digit numeric User IDs (no `EMP-`), email verification fields, regenerate IDs of the 6 dummy users | Done | 2026-10-02 | PR #4 merged, hotfix PR #5 merged, CI green, 10-digit random IDs, email verification schema, 180 tests passing, 83% coverage |
+| 4b | Login modes: Admin (email) and Employee (User ID), server-enforced (X3) | in progress | | Branch feat/slice-4b-login-modes, dual login mode enforcement, 187 tests passing |
 | 4c | Signup + email verification (backend) | Pending | | |
 | 4d | Frontend: login toggle, signup page, verify-email page | Pending | | |
 | 5 | Isolation test suite (section 5.A) fully green | Pending | | |
@@ -43,6 +43,7 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 | 2026-10-02 | A4 changed: User IDs are 10-digit random numeric (was: sequential counter that keeps existing numbers). `EMP-` prefix dropped completely; the 6 existing users are dummy test accounts and get regenerated IDs. FR-5 and FR-11 updated to match. |
 | 2026-10-02 | Added A11 (signup and login live in the app, website only links), A12 (admin credentials: normal email + password + verification link, no Google/Apple sign-in for now), B16 (plan selection and payment happen inside the app; plan activates only via verified webhook). |
 | 2026-10-02 | X8 (additional Tier-1 admins) marked deferred. Out of Scope extended. Slice 4 split into 4a to 4d. |
+| 2026-10-03 | Slice 4b login modes: payload is {identifier, password, mode}; wrong-mode login is treated as user-not-found and does not count toward lockout; generic error "Incorrect credentials." |
 
 ---
 
