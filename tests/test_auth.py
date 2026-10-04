@@ -86,7 +86,7 @@ async def test_login_pending_password_change_user_returns_true_flag(
         return True
 
     with patch(
-        "app.services.user_service.send_employee_welcome_email", side_effect=mock_send_email
+        "app.routes.users.send_employee_welcome_email", side_effect=mock_send_email
     ):
         create_res = await client.post(
             "/users/employees",

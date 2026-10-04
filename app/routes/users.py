@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.email import send_employee_welcome_email
 from app.core.exceptions import AuthorizationException
 from app.core.security import require_password_change_cleared
 from app.db.session import get_db
@@ -136,18 +137,27 @@ async def list_employees(
 )
 async def create_employee(
     employee_in: EmployeeCreate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(check_access_level_dependency(1)),
 ):
     """
     Add a new employee account. Accessible by Tier 1 only.
-    Generates employee_code, temporary password, and sends welcome email.
+    Generates employee_code, temporary password, and dispatches welcome email in background task.
     Never returns plaintext password in API response.
     """
-    new_user, email_sent = await user_service.create_employee(
+    new_user, temp_password = await user_service.create_employee(
         db=db,
         employee_in=employee_in,
         organization_id=current_admin.organization_id,
+    )
+
+    background_tasks.add_task(
+        send_employee_welcome_email,
+        email=new_user.email,
+        full_name=new_user.full_name,
+        employee_code=new_user.employee_code,
+        temp_password=temp_password,
     )
 
     return EmployeeCreateResponse(
@@ -161,26 +171,36 @@ async def create_employee(
         designation=new_user.designation,
         must_change_password=new_user.must_change_password,
         created_at=new_user.created_at,
-        email_sent=email_sent,
+        email_sent=True,
     )
 
 
 @router.post("/{user_id}/reset-temp-password")
 async def reset_employee_temp_password(
     user_id: int,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(check_access_level_dependency(1)),
 ):
     """
-    Resets an employee's password to a new temporary password and resends email.
+    Resets an employee's password to a new temporary password and resends email in background task.
     Accessible by Tier 1 only.
     """
-    user, email_sent = await user_service.reset_employee_temp_password(
+    user, temp_password = await user_service.reset_employee_temp_password(
         db=db,
         target_user_id=user_id,
         organization_id=current_admin.organization_id,
     )
-    return {"id": user.id, "email_sent": email_sent}
+
+    background_tasks.add_task(
+        send_employee_welcome_email,
+        email=user.email,
+        full_name=user.full_name,
+        employee_code=user.employee_code,
+        temp_password=temp_password,
+    )
+
+    return {"id": user.id, "email_sent": True}
 
 
 @router.patch("/{user_id}/reports-to", response_model=UserRead)
