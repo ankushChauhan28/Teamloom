@@ -217,14 +217,17 @@ def setup_test_database():
 def mock_send_welcome_email() -> AsyncGenerator[MagicMock, None]:
     """
     Autouse Fixture (Scope: Function):
-    Automatically mocks send_employee_welcome_email for ALL tests in the suite
+    Automatically mocks SMTPEmailSender for ALL tests in the suite
     so no real SMTP network connections are ever attempted during pytest execution.
     """
     with patch(
-        "app.services.user_service.send_employee_welcome_email",
+        "app.core.email.SMTPEmailSender.send_welcome_email",
         return_value=True,
-    ) as mock_service_email:
-        yield mock_service_email
+    ) as mock_smtp_welcome, patch(
+        "app.core.email.SMTPEmailSender.send_verification_email",
+        return_value=True,
+    ):
+        yield mock_smtp_welcome
 
 
 @pytest.fixture(autouse=True)

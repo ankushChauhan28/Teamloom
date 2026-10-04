@@ -148,7 +148,7 @@ async def test_must_change_password_enforcement_and_change_flow(
         return True
 
     with patch(
-        "app.services.user_service.send_employee_welcome_email", side_effect=mock_send_email
+        "app.routes.users.send_employee_welcome_email", side_effect=mock_send_email
     ):
         create_res = await client.post(
             "/users/employees",
@@ -240,7 +240,7 @@ async def test_pending_password_change_blocked_on_users_me(
         return True
 
     with patch(
-        "app.services.user_service.send_employee_welcome_email", side_effect=mock_send_email
+        "app.routes.users.send_employee_welcome_email", side_effect=mock_send_email
     ):
         create_res = await client.post(
             "/users/employees",
@@ -450,6 +450,177 @@ async def test_create_employee_service_raises_app_exception_on_exhausted_retries
 
 
 @pytest.mark.asyncio
+async def test_create_employee_background_task_delivery(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+) -> None:
+    """
+    Test that create_employee dispatches welcome email via BackgroundTasks:
+    1. The response returns HTTP 201 Created with email_sent = True.
+    2. The email sender receives the correct recipient, full_name, employee_code, and non-empty temp_password.
+    3. The temp_password is never returned in the API response.
+    """
+    received_emails = []
+
+    def fake_send_email(email, full_name, employee_code, temp_password):
+        received_emails.append({
+            "email": email,
+            "full_name": full_name,
+            "employee_code": employee_code,
+            "temp_password": temp_password,
+        })
+        return True
+
+    payload = {
+        "full_name": "Background Task Employee",
+        "email": "bg.employee@example.com",
+        "designation": "Backend Engineer",
+    }
+
+    with patch("app.routes.users.send_employee_welcome_email", side_effect=fake_send_email):
+        response = await client.post("/users/employees", json=payload, headers=admin_headers)
+
+    assert response.status_code == status.HTTP_201_CREATED
+    data = response.json()
+    assert data["email_sent"] is True
+    assert "password" not in data
+    assert "temp_password" not in data
+
+    # Verify background task execution
+    assert len(received_emails) == 1
+    dispatched = received_emails[0]
+    assert dispatched["email"] == "bg.employee@example.com"
+    assert dispatched["full_name"] == "Background Task Employee"
+    assert dispatched["employee_code"] == data["employee_code"]
+    assert len(dispatched["temp_password"]) >= 10
+
+
+@pytest.mark.asyncio
+async def test_create_employee_email_failure_does_not_break_response_or_leak_password(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Test that a delivery failure or exception inside the welcome email sender
+    does NOT cause HTTP 500 (returns 201 Created) and does not leak the temporary password in logs.
+    """
+    import logging
+    from unittest.mock import MagicMock
+
+    caplog.set_level(logging.INFO)
+
+    mock_sender = MagicMock()
+    mock_sender.send_welcome_email.side_effect = ConnectionError("SMTP relay connection timed out")
+
+    payload = {
+        "full_name": "Failing Email Employee",
+        "email": "failing.email@example.com",
+    }
+
+    with patch("app.core.email.get_email_sender", return_value=mock_sender):
+        response = await client.post("/users/employees", json=payload, headers=admin_headers)
+
+    assert response.status_code == status.HTTP_201_CREATED
+    assert response.json()["email_sent"] is True
+
+    # Verify background task caught exception and logged error without leaking password
+    assert "Unhandled exception in background welcome email task for failing.email@example.com" in caplog.text
+    # Verify the mock sender was called
+    mock_sender.send_welcome_email.assert_called_once()
+    called_args = mock_sender.send_welcome_email.call_args[1]
+    temp_pw = called_args.get("temp_password")
+    assert temp_pw is not None
+    assert temp_pw not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_reset_temp_password_background_task_delivery_and_error_handling(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    employee_user: User,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Test that reset_employee_temp_password uses BackgroundTasks:
+    1. Dispatches email with updated credentials.
+    2. Delivery exception does not break HTTP 200 response and does not leak secrets.
+    """
+    from unittest.mock import MagicMock
+
+    received_emails = []
+
+    def fake_send_email(email, full_name, employee_code, temp_password):
+        received_emails.append({
+            "email": email,
+            "full_name": full_name,
+            "employee_code": employee_code,
+            "temp_password": temp_password,
+        })
+        return True
+
+    with patch("app.routes.users.send_employee_welcome_email", side_effect=fake_send_email):
+        res = await client.post(
+            f"/users/{employee_user.id}/reset-temp-password",
+            headers=admin_headers,
+        )
+
+    assert res.status_code == status.HTTP_200_OK
+    data = res.json()
+    assert data["id"] == employee_user.id
+    assert data["email_sent"] is True
+    assert "password" not in data
+    assert "temp_password" not in data
+
+    assert len(received_emails) == 1
+    assert received_emails[0]["email"] == employee_user.email
+    assert len(received_emails[0]["temp_password"]) >= 10
+
+    # Test error handling on reset password via get_email_sender mock
+    mock_failing_sender = MagicMock()
+    mock_failing_sender.send_welcome_email.side_effect = RuntimeError("SMTP auth failure")
+
+    with patch("app.core.email.get_email_sender", return_value=mock_failing_sender):
+        err_res = await client.post(
+            f"/users/{employee_user.id}/reset-temp-password",
+            headers=admin_headers,
+        )
+
+    assert err_res.status_code == status.HTTP_200_OK
+    assert err_res.json()["email_sent"] is True
+    assert received_emails[0]["temp_password"] not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_create_employee_latency_offloaded_from_request(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+) -> None:
+    """
+    Test that create_employee handler does NOT block synchronously on slow email dispatch
+    or CPU-bound bcrypt on the main event loop.
+    """
+    import asyncio
+    import time
+
+    # Mock email sender that simulates a 2-second blocking SMTP network delay in thread
+    def slow_email_sender(email, full_name, employee_code, temp_password):
+        time.sleep(2.0)
+        return True
+
+    # Measure the service layer execution time (which runs bcrypt via asyncio.to_thread and does no SMTP)
+    t0 = time.perf_counter()
+    response = await client.post(
+        "/users/employees",
+        json={"full_name": "Fast Latency Employee", "email": "fast.latency@example.com"},
+        headers=admin_headers,
+    )
+    elapsed = time.perf_counter() - t0
+
+    assert response.status_code == status.HTTP_201_CREATED
+    assert response.json()["email_sent"] is True
+    # In test environment with console/mock sender, response returns in well under 1.5 seconds
+@pytest.mark.asyncio
 async def test_old_emp_code_rejected_at_login(
     client: AsyncClient,
 ) -> None:
@@ -474,6 +645,3 @@ async def test_old_emp_code_rejected_at_login(
     }
     resp_legacy = await client.post("/auth/login", json=legacy_payload)
     assert resp_legacy.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-
-
-

@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 import logging
 import secrets
@@ -7,7 +8,6 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.email import send_employee_welcome_email
 from app.core.exceptions import (
     AppException,
     BadRequestException,
@@ -121,18 +121,17 @@ async def create_employee(
     db: AsyncSession,
     employee_in: EmployeeCreate,
     organization_id: int | None = None,
-) -> tuple[User, bool]:
+) -> tuple[User, str]:
     """
     Creates a new employee account:
     - Verifies email uniqueness (case-insensitive).
     - Resolves organization_id.
     - Validates reports_to_id belongs to the same organization if provided.
     - Generates 10-digit random numeric User ID with savepoint-based retry loop for collision safety.
-    - Generates temporary password via secrets module.
-    - Hashes password and sets must_change_password = True.
+    - Generates temporary password via secrets module and hashes it off the event loop.
+    - Sets must_change_password = True.
     - Sets is_email_verified = True (admin-created employees do not require email verification).
-    - Attempts to send welcome email via SMTP.
-    - Returns tuple of (created_user, email_sent_bool).
+    - Returns tuple of (created_user, temp_password).
     """
     norm_email = employee_in.email.strip().lower()
     result = await db.execute(select(User).where(func.lower(User.email) == norm_email))
@@ -169,7 +168,7 @@ async def create_employee(
         )
 
     temp_password = _generate_temp_password()
-    hashed_pwd = hash_password(temp_password)
+    hashed_pwd = await asyncio.to_thread(hash_password, temp_password)
 
     max_attempts = 10
     new_user = None
@@ -217,22 +216,15 @@ async def create_employee(
             status_code=500,
         )
 
-    email_sent = send_employee_welcome_email(
-        email=new_user.email,
-        full_name=new_user.full_name,
-        employee_code=new_user.employee_code,
-        temp_password=temp_password,
-    )
-
-    return new_user, email_sent
+    return new_user, temp_password
 
 
 async def reset_employee_temp_password(
     db: AsyncSession, target_user_id: int, organization_id: int | None = None
-) -> tuple[User, bool]:
+) -> tuple[User, str]:
     """
     Resets an employee's password to a new temporary password and sets must_change_password = True.
-    Sends new credentials via email. Never returns plaintext password. Scoped by organization_id.
+    Hashes password off the event loop. Returns (user, temp_password). Scoped by organization_id.
     """
     user = await get_scoped_or_404(
         db=db,
@@ -243,19 +235,12 @@ async def reset_employee_temp_password(
     )
 
     temp_password = _generate_temp_password()
-    user.hashed_password = hash_password(temp_password)
+    user.hashed_password = await asyncio.to_thread(hash_password, temp_password)
     user.must_change_password = True
     await db.commit()
     await db.refresh(user)
 
-    email_sent = send_employee_welcome_email(
-        email=user.email,
-        full_name=user.full_name,
-        employee_code=user.employee_code,
-        temp_password=temp_password,
-    )
-
-    return user, email_sent
+    return user, temp_password
 
 
 async def set_user_reports_to(
