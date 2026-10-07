@@ -1,6 +1,6 @@
 # Teamloom SaaS Requirements: Multi-Tenancy + Billing
 
-Status: requirements locked, Slices 1-3, 4a-4c done, Slice 4d next.
+Status: requirements locked, Slices 1-3, 4a-4d done, Slice 4e next.
 Scope: turn Teamloom into a multi-company SaaS with pay-first access, packs, subscriptions and invoices. AI features come after this is proven with real-scenario tests.
 
 Items marked **(default)** were not explicitly chosen by the product owner. They are sensible assumptions; change them before implementation if wrong.
@@ -19,7 +19,8 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 | 4a | DB cleanup: 10-digit numeric User IDs (no `EMP-`), email verification fields, regenerate IDs of the 6 dummy users | Done | 2026-10-02 | PR #4 merged, hotfix PR #5 merged, CI green, 10-digit random IDs, email verification schema, 180 tests passing, 83% coverage |
 | 4b | Login modes: Admin (email) and Employee (User ID), server-enforced (X3) | Done | 2026-10-03 | Merged to main (PR #6), dual login mode enforcement, 187 tests passing |
 | 4c | Signup + email verification (backend) | Done | 2026-10-04 | Branch feat/slice-4c-signup-verification, POST /auth/signup, POST /auth/verify-email, POST /auth/resend-verification, NFR-3 EmailSender interface, unverified admin login enforcement, unverified signup 7d cleanup, backfill migration n4o5p6q7r8s9, 201 tests passing, 82% coverage |
-| 4d | Frontend: login toggle, signup page, verify-email page, unverified login UX, auth UI polish | Pending | | |
+| 4d | Frontend: login toggle, signup page, verify-email page, unverified login UX, auth UI polish | Done | 2026-10-07 | Branch feat/slice-4d-frontend-auth, AuthLayout, LoginPage dual-mode toggle with password clearing & Option 2 unverified admin resend helper on 401, SignupPage at /signup (201 check-email state + resend), VerifyEmailPage at /verify-email (single-use StrictMode guard + resend fallback), ChangePasswordPage flash fix, RegisterPage removed, oxlint (0 errors) & vite build green |
+| 4e | Employee invite flow | Pending | | |
 | 5 | Isolation test suite (section 5.A) fully green | Pending | | |
 | 6 | Plans, subscription model, `pending_payment` gating, seat limits (race-safe) | Pending | | |
 | 7 | Payment provider, checkout, webhooks (signature, idempotency) | Pending | | |
@@ -32,7 +33,8 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 
 ### Known Gaps / Deferred to Later Slices
 - `AdminTasksPage` and `AdminLeavesPage` fetch at most 100 records (`limit=100`) and need server-side filtering / paging UI later.
-- Dual login (Admin email / User ID), self-serve signup and email verification backend are completed (4a-4c); frontend UI is in Slice 4d.
+- There is currently no UI to resend a temporary password or to see email delivery failures (the `POST /users/{user_id}/reset-temp-password` endpoint exists in the backend but has no UI button), to be solved by Slice 4e (Employee invite flow).
+- Production needs a real transactional email provider with domain authentication (SPF/DKIM/DMARC) and `EMAIL_BACKEND` explicitly set to `smtp`.
 - Until Slices 6 and 7 are done, a company created by signup is not payment-gated. Do not deploy Slice 4 publicly before then.
 - Admin account recovery (admin loses access to the registered email) has no self-serve path. It will be handled by the operator CLI (Slice 10). A forgot-password flow is not specified yet and needs a decision.
 - Email change is not supported, and additional Tier-1 admins (X8) are deferred.
@@ -40,7 +42,7 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 ### Items Needing Decision / Investigation
 - **Login Rate Limit (Decision)**: The login rate limit (10 requests per 15 minutes per IP) may be too tight for organizations operating behind a single corporate / office NAT IP. Needs a decision on whether to relax the limit, key rate limiting by `{IP, identifier}`, or separate IP rate limiting from account lockout.
 - **Production Email Logging (Decision)**: Production environments must never use the console email backend or log raw verification tokens/passwords to logs or monitoring systems.
-- **Create Employee Request Latency (Investigation)**: Creating an employee currently takes 3-4 seconds; investigate whether the welcome email is being sent synchronously inside the request rather than fully non-blocking in background tasks.
+- **Create Employee Request Latency (Resolved)**: Fixed in PR #10 (branch fix/create-employee-latency): bcrypt password hashing offloaded to threadpool via `asyncio.to_thread`, welcome/reset emails dispatched non-blocking in `BackgroundTasks`. `email_sent=True` means delivery was successfully queued (delivery failures logged to server logs). Request latency reduced from ~3-4s to ~150-200ms.
 
 ### Requirement Change Log
 | Date | Change |
@@ -52,6 +54,7 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 | 2026-10-04 | Slice 4c self-serve signup & email verification (backend): POST /auth/signup (no auto-login/tokens), POST /auth/verify-email (POST-only to prevent prefetch consumption), POST /auth/resend-verification with anti-enumeration, NFR-3 EmailSender interface with SMTP/Console providers, background email delivery, unverified admin login block, 7-day unverified signup cleanup job, backfill migration n4o5p6q7r8s9. |
 | 2026-10-04 | Slice 4c manual smoke test complete on running dev app: verified real SMTP email delivery, signup, verification link, resend verification, anti-enumeration on duplicate signup/resend, and admin-created employee immediate login. |
 | 2026-10-04 | Slice 4d scope refined: verify-email page (email links to `/verify-email?token=...`), signup page, "check your email + resend" UX for unverified login, clear password field on login mode switch, fix brief change-password form flash before redirect. Added create-employee latency investigation (3-4s welcome email sync vs background). |
+| 2026-10-07 | Slice 4d completed (frontend auth UI: shared AuthLayout, LoginPage dual-mode toggle + password clearing + Option 2 unverified admin resend helper on 401, SignupPage with anti-enumeration check-email view, VerifyEmailPage with single-use StrictMode guard & fallback resend form, ChangePasswordPage mount flow capture preventing layout flash, RegisterPage removed). Latency fix resolved in PR #10 (BackgroundTasks + threadpool bcrypt). Added Slice 4e (Employee invite flow) to delivery plan. |
 
 ---
 
@@ -98,55 +101,47 @@ Items marked **(default)** were not explicitly chosen by the product owner. They
 |----|---------|
 | X1 | A company that signed up but never paid stays in `pending_payment`; the admin can log in but sees only the pack selection / billing page. Unpaid signups are deleted after 7 days. |
 | X2 | Admin email must be verified via a link before checkout. Any email domain is accepted (no Gmail block). |
-| X3 | Admin mode accepts only Tier-1 admin accounts; Employee mode accepts only non-Tier-1 accounts (manager, team lead, employee). A wrong-mode login fails with a generic error. The toggle is only UI; the server enforces it. |
-| X4 | Requesting another company's record by ID returns 404 (not 403), so existence is not revealed. |
-| X5 | Custom pack allows 1 to 500 seats; above that, the UI says "contact us". |
-| X6 | Upgrading to a bigger pack takes effect immediately and starts a new billing period. No proration in v1. |
-| X7 | Amounts are stored in paise (integers), never floats. |
-| X8 | **Deferred (not in v1).** Additional Tier-1 admins (created later by the first admin) would log in with their own email in Admin mode. For now each company has exactly one Tier-1 admin, so the operator CLI (Slice 10) is the recovery path if that admin loses email access. |
 
 ---
 
-## 2. Functional Requirements
+## 2. Functional Requirements (delta from today)
 
-### 2.1 Organizations and signup
-- FR-1: `Organization` has a name, id, status, created date, optional GST number.
-- FR-2: Signup creates the organization (status `pending_payment`), its first Tier-1 Admin, and sends an email verification link.
-- FR-3: Checkout is only possible after the admin email is verified (X2). The app is only usable after the first successful payment.
-- FR-4: Email is unique system-wide (A3). Signup with an existing email is rejected.
-- FR-5: User ID generation stays race-safe: IDs are random 10-digit numbers (A4); the database unique constraint plus retry on collision guarantees two admins creating users at the same time never get the same code.
-- FR-6: Unpaid signups are removed after 7 days by a scheduled job, freeing the email (X1).
+### 2.1 Multi-tenancy
+- FR-1: Every existing and new table has `organization_id` (except `revoked_tokens` and system tables).
+- FR-2: `POST /auth/signup` creates a new organization (status: `pending_payment`) and its first Tier-1 Admin user (`is_email_verified: False`), and sends a verification email.
+- FR-3: Every query and mutation is filtered by the authenticated user's `organization_id` (enforced at the service/ORM layer, proven by isolation tests).
+- FR-4: Email addresses are unique system-wide.
+- FR-5: User IDs are 10-digit random numbers, unique system-wide, generated on employee creation.
+- FR-6: Direct-report hierarchy (`reports_to_id`) and task assignment cannot cross company boundaries.
+- FR-7: Cross-company lookups return 404 (not 403) so existence of records in other companies is never revealed.
+- FR-8: The default company ("Internal / free forever") is seeded on first migration and holds the existing data.
 
-### 2.2 Login and users
-- FR-7: Login page has an "Admin" mode (email + password) and an "Employee" mode (User ID + password). The existing lockout, rate limiting, token revocation and forced-password-change behavior apply to both.
-- FR-8: Mode rules per X3 are enforced by the backend.
-- FR-9: Admins create employees inside their own organization only (existing flow, now org-scoped). Employee email must be unique system-wide.
-- FR-10: Hierarchy (reports_to), direct-report rules and cycle protection work **inside** an organization; a user can never report to someone in another organization.
-- FR-11: Existing users, tasks and leaves are migrated into one default organization. Existing admins log in via Admin mode with their email; everyone else via Employee mode with their User ID. The existing users are dummy test accounts, so their User IDs are regenerated in the new 10-digit format (A4).
+### 2.2 Dual login modes
+- FR-9: The login page has two modes: "Login as Admin" (official email + password) and "Login as Employee" (User ID + password).
+- FR-10: Admin mode accepts only users with `access_level == 1` and authenticates by email.
+- FR-11: Employee mode accepts only users with `access_level > 1` and authenticates by 10-digit User ID.
+- FR-12: An employee trying to log in with an admin's email or an admin trying to log in with an employee's User ID receives the generic error "Incorrect credentials." with no hint that the account exists.
 
-### 2.3 Data isolation
-- FR-12: Every query on users, tasks, leave requests and analytics is filtered by the requester's organization.
-- FR-13: Admin "list all" endpoints and org-wide analytics return only the admin's own organization, with pagination.
-- FR-14: Cross-organization access by ID returns 404 (X4).
-- FR-15: Any table added later carries `organization_id`.
+### 2.3 Email verification
+- FR-13: Signup sends a verification email with a single-use, expiring token link (`/verify-email?token=...`).
+- FR-14: Unverified admins cannot log in; attempt returns generic error with an option to resend the verification email.
+- FR-15: Token expires after 24 hours (default). Resend invalidates earlier tokens.
+- FR-16: Once verified, `is_email_verified` is set to `True` and `email_verified_at` is stamped.
 
-### 2.4 Packs, payment-first access and seats
-- FR-16: Each organization has exactly one subscription with a status (see 2.5).
-- FR-17: Seat count = number of active users in the organization.
-- FR-18: Creating or reactivating a user is blocked when active users would exceed the seat limit. This check is race-safe (two simultaneous adds at the limit: only one succeeds).
-- FR-19: Deactivating a user frees a seat immediately.
-- FR-20: Downgrade is rejected if active users exceed the new pack's limit (B8).
-- FR-21: Custom pack: admin chooses a seat count (X5); price = seats x custom per-seat rate x months in the chosen duration, minus the duration discount.
+### 2.4 Plans and seat limits
+- FR-17: Packs: Starter (up to 20), Growth (up to 50), Business (up to 100), Custom (1 to 500).
+- FR-18: Durations: Monthly, Quarterly (10% off), Yearly (20% off).
+- FR-19: A seat is one user where `is_active = True`. Deactivated users do not count against the limit.
+- FR-20: Creating a user or reactivating a deactivated user when `active_count >= seat_limit` is rejected with an upgrade prompt.
+- FR-21: The default "Internal" company has `status = 'active'`, no seat limit and no expiry.
 
-### 2.5 Subscription lifecycle
-Statuses: `pending_payment`, `active`, `past_due`, `read_only`, `cancel_at_period_end`, `deleted`.
-
-- FR-22: `pending_payment` -> (first successful payment) -> `active`.
-- FR-23: `active` renewal fails -> `past_due` (3-day grace, full access, warning banner) -> `read_only`.
-- FR-24: `cancel_at_period_end`: full access until period end, then `read_only`.
-- FR-25: `read_only` for 30 days, then the organization's data is deleted by a scheduled job (`deleted`). Payment during `read_only` restores `active`.
-- FR-26: **Read-only mode** allows login and viewing data and billing. It blocks creating or editing tasks, leaves, users, and every other write except billing actions.
-- FR-27: `pending_payment` mode allows only the billing/pack-selection pages.
+### 2.5 Lifecycle and access states
+- FR-22: `pending_payment`: admin can only view/complete checkout; all other app endpoints return 402/403.
+- FR-23: `active`: full access within the paid seat limit.
+- FR-24: `past_due` (payment failed): 3-day grace period with warning banner, full access remains.
+- FR-25: `read_only` (grace period ended or cancelled period ended): login works, all mutations blocked, billing page accessible.
+- FR-26: `cancelled`: access continues until the end of the paid duration, then transitions to `read_only`.
+- FR-27: Data deletion: organizations in `read_only` for 30+ days have their data deleted by a scheduled job.
 - FR-28: Status changes come from payment-provider webhooks and scheduled checks, never from the frontend.
 
 ### 2.6 Payments and webhooks
@@ -308,12 +303,8 @@ Each slice ships working and tested before the next starts.
    - 4a. DB cleanup: 10-digit numeric User IDs, email verification fields, regenerate IDs of the dummy users (Done)
    - 4b. Login modes (Admin email / Employee User ID), server-enforced (Done)
    - 4c. Signup and email verification backend (Done)
-   - 4d. Frontend:
-     - Login mode toggle (Admin vs Employee) with password field clearing on switch
-     - Signup page (`/signup`)
-     - Email verification landing page (`/verify-email?token=...`)
-     - "Check your email + resend verification" UX for unverified admin logins
-     - Fix brief change-password form flash before dashboard redirect on already-authenticated sessions
+   - 4d. Frontend: login mode toggle, signup page, verify-email page, unverified login UX, auth UI polish (Done)
+   - 4e. Employee invite flow: replace the "temporary password by email" onboarding with a one-time set-password invite link (hashed, single-use, expiring token, reusing the verification-token pattern); the admin sees invite status (Pending / Accepted / Expired) in the employee list with Resend and Revoke actions; a wrongly typed email is fixed by revoking and re-inviting; the admin never sees or handles a password; needs a migration; it must ship before Slice 5 so isolation tests cover the invite endpoints and before Slice 6 so seat checks apply once. (Pending)
 5. Isolation test suite (section 5.A) fully green
 6. Plans, subscription model, `pending_payment` gating, seat limits (race-safe)
 7. Payment provider, checkout, webhooks (signature, idempotency)

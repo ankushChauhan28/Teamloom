@@ -6,6 +6,8 @@ import { PasswordChangeRoute } from './components/guards/PasswordChangeRoute';
 import { AdminRoute } from './components/guards/AdminRoute';
 import { DirectReportsRoute } from './components/guards/DirectReportsRoute';
 import { LoginPage } from './pages/LoginPage';
+import { SignupPage } from './pages/SignupPage';
+import { VerifyEmailPage } from './pages/VerifyEmailPage';
 import { ChangePasswordPage } from './pages/ChangePasswordPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { AdminTasksPage } from './pages/AdminTasksPage';
@@ -49,8 +51,10 @@ export function App() {
       <Routes>
         {/* Public Auth Routes */}
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/signup" element={<SignupPage />} />
+        <Route path="/verify-email" element={<VerifyEmailPage />} />
 
-        {/* Forced Password Change Route */}
+        {/* Forced / Voluntary Password Change Route */}
         <Route
           path="/change-password"
           element={
