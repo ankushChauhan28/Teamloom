@@ -12,7 +12,8 @@ export function ChangePasswordPage() {
   const navigate = useNavigate();
   const { changePassword, logout, user } = useAuthStore();
 
-  const isForcedFlow = Boolean(user?.must_change_password);
+  // Capture flow type once on mount to prevent layout/content flash when user state updates
+  const [isForcedFlow] = useState(() => Boolean(user?.must_change_password));
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -85,6 +86,8 @@ export function ChangePasswordPage() {
     navigate('/login', { replace: true });
   };
 
+  const isFormDisabled = isSubmitting || Boolean(successMessage);
+
   return (
     <div className="min-h-screen bg-[var(--bg-page)] flex flex-col items-center justify-center p-4">
       {/* Brand Header */}
@@ -108,7 +111,8 @@ export function ChangePasswordPage() {
             <button
               type="button"
               onClick={handleCancel}
-              className="inline-flex items-center gap-1.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors mb-3 cursor-pointer"
+              disabled={isFormDisabled}
+              className="inline-flex items-center gap-1.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors mb-3 cursor-pointer disabled:opacity-50"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>Back</span>
@@ -132,7 +136,7 @@ export function ChangePasswordPage() {
         )}
 
         {successMessage && (
-          <Alert variant="success" className="mb-4">
+          <Alert variant="success" className="mb-4" dismissible={false}>
             {successMessage}
           </Alert>
         )}
@@ -148,7 +152,7 @@ export function ChangePasswordPage() {
               if (errors.currentPassword) setErrors({ ...errors, currentPassword: '' });
             }}
             error={errors.currentPassword}
-            disabled={isSubmitting}
+            disabled={isFormDisabled}
             autoComplete="current-password"
           />
 
@@ -162,7 +166,7 @@ export function ChangePasswordPage() {
               if (errors.newPassword) setErrors({ ...errors, newPassword: '' });
             }}
             error={errors.newPassword}
-            disabled={isSubmitting}
+            disabled={isFormDisabled}
             autoComplete="new-password"
           />
 
@@ -176,7 +180,7 @@ export function ChangePasswordPage() {
               if (errors.confirmPassword) setErrors({ ...errors, confirmPassword: '' });
             }}
             error={errors.confirmPassword}
-            disabled={isSubmitting}
+            disabled={isFormDisabled}
             autoComplete="new-password"
           />
 
@@ -186,7 +190,7 @@ export function ChangePasswordPage() {
                 type="button"
                 variant="ghost"
                 onClick={handleCancel}
-                disabled={isSubmitting}
+                disabled={isFormDisabled}
                 className="flex-1 justify-center"
               >
                 Cancel
@@ -197,7 +201,7 @@ export function ChangePasswordPage() {
               type="submit"
               variant="primary"
               className={`${isForcedFlow ? 'w-full' : 'flex-1'} justify-center`}
-              disabled={isSubmitting}
+              disabled={isFormDisabled}
             >
               {isSubmitting ? (
                 <span className="flex items-center gap-2">
@@ -218,7 +222,8 @@ export function ChangePasswordPage() {
             <button
               type="button"
               onClick={handleLogout}
-              className="flex items-center gap-1 text-[var(--text-secondary)] hover:text-[var(--danger)] transition-colors font-medium cursor-pointer"
+              disabled={isFormDisabled}
+              className="flex items-center gap-1 text-[var(--text-secondary)] hover:text-[var(--danger)] transition-colors font-medium cursor-pointer disabled:opacity-50"
             >
               <LogOut className="w-3.5 h-3.5" /> Sign out
             </button>
