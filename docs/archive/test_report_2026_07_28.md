@@ -1,3 +1,5 @@
+> **Note**: This document is a historical QA test report snapshot for the legacy pre-multi-tenant version of Teamloom (superseded by automated Pytest test suites covering multi-tenancy and Slice 4).
+
 # Comprehensive QA Test Report: Employee Task Management System API
 
 **Date of Execution**: July 28, 2026  
