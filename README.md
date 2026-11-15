@@ -37,8 +37,10 @@ A modern workforce task management platform featuring reporting hierarchy, perfo
 
 ## ✨ Key Features
 
-- **Manager Hierarchy & Supervisory Scoping**: Self-referencing supervisor mapping (`reports_to_id`) with cycle detection, supporting hierarchy-scoped task assignment, leave approvals, and direct report rosters (`/my-team`).
-- **Administrative Employee Provisioning**: Secure onboarding flow generating sequential employee codes (`EMP-1001`), job title designations, supervisor assignments, temporary passwords, and welcome emails (`/admin/employees`).
+- **Self-Serve Company Signup & Email Verification**: Automated multi-tenant workspace onboarding creating an `Organization` in `pending_payment` status and its first Tier-1 Administrator (`POST /auth/signup`). Dispatches single-use, 24-hour expiring verification links (`POST /auth/verify-email`) in non-blocking background tasks with anti-enumeration protection.
+- **Dual-Mode Login & 10-Digit User IDs**: Unified login portal supporting Admin mode (official email + password) and Employee mode (10-digit random numeric User ID + password). User IDs are cryptographically random 10-digit strings (e.g. `0481927361`) enforced by database uniqueness with collision retry safety.
+- **Manager Hierarchy & Supervisory Scoping**: Self-referencing supervisor mapping (`reports_to_id`) with cycle detection, supporting hierarchy-scoped task assignment, leave visibility, and direct report rosters (`/my-team`).
+- **Administrative Employee Provisioning**: Secure onboarding flow generating 10-digit numeric User IDs, job title designations, supervisor assignments, temporary passwords, and welcome emails (`/admin/employees`).
 - **Forced & Voluntary Password Management**: Automated forced redirect to `/change-password` for new hires on initial login, alongside voluntary self-service password updates accessible via the profile dropdown.
 - **Task & Leave Management Workflows**: End-to-end task lifecycle (`PENDING` → `IN_PROGRESS` → `COMPLETED`) and personal leave request submission portal (`/leaves`) with administrative review hub (`/admin/leaves`).
 - **Live Deadline Countdown Ticker**: Dynamic `DueCountdown` component updating every minute with exact relative deadline status ("2d 4h left", "15m left", "Overdue by 1d 3h").
@@ -54,7 +56,7 @@ A modern workforce task management platform featuring reporting hierarchy, perfo
 - **Framework**: FastAPI (Async Python 3.11+)
 - **Database & ORM**: PostgreSQL 16, Async SQLAlchemy 2.0, `asyncpg`
 - **Migrations**: Alembic
-- **Authentication**: PyJWT (Dual-Token), Passlib / Bcrypt password hashing
+- **Authentication**: PyJWT (Dual-Token), Bcrypt password hashing
 - **Validation**: Pydantic v2 & Pydantic-Settings
 
 ### Frontend
@@ -77,6 +79,13 @@ Teamloom/
 │   ├── schemas/          # Pydantic request & response validation schemas
 │   └── services/         # Domain business logic & server-side SQL queries
 ├── alembic/              # Database schema migration scripts
+├── docs/                 # Architectural documentation, schemas, and specifications
+│   ├── BACKEND.md        # Authoritative backend technical reference
+│   ├── FRONTEND.md       # Authoritative frontend technical reference
+│   ├── database.md       # Full PostgreSQL database schema and ER diagram
+│   ├── PROJECT_OVERVIEW.md # Comprehensive project architecture and routes inventory
+│   ├── SECURITY_AND_AUTH.md# Auth flows, security review, and permission model
+│   └── TEAMLOOM_SAAS_REQUIREMENTS.md # SaaS multi-tenancy & billing specification
 ├── scripts/              # Administrative CLI scripts (seed_admin, unlock_user, run_qa_suite)
 ├── tests/                # Pytest async integration & unit test suite
 ├── frontend/             # React 19 + Vite frontend application
@@ -186,6 +195,6 @@ pytest
 pytest --cov=app --cov-report=term-missing
 ```
 
-- **Pass Rate**: 100% (**158 passing tests**)
+- **Automated Tests**: **205 collected tests** (100% pass rate in CI)
 - **Database Engine**: PostgreSQL 16 (Docker) with Alembic migration parity
-- **Statement Coverage**: **87% overall**
+- **Statement Coverage**: **~83% to 87% overall**
