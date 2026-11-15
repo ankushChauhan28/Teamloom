@@ -9,13 +9,13 @@
 ### 1.1 Project Purpose, Target Personas & Solved Problems
 **Teamloom** is an enterprise workforce task management, managerial oversight, and organizational operations platform designed to coordinate day-to-day work assignments, absence management, supervisory reporting chains, and delivery analytics. Originally built as an internal tool, it is undergoing an architectural transition toward a multi-tenant, subscription-gated SaaS (Slices 1 through 4d complete).
 
-#### Target Personas & Roles (inferred from `app/models/user.py`, `app/core/permissions.py`, `docs/PROJECT_MASTERY.md`)
+#### Target Personas & Roles (inferred from `app/models/user.py`, `app/core/permissions.py`, `docs/TEAMLOOM_SAAS_REQUIREMENTS.md`)
 1. **Tier 1 — Executive / Administrator (`access_level = 1`, legacy role `ADMIN`)**:
    - The first administrator is provisioned during self-serve company signup (`POST /auth/signup`).
    - Powers: Provision employee accounts, assign designations, establish and rewire reporting chains (`reports_to_id`), deactivate/reactivate staff, create system-wide tasks, delete tasks, review and approve/reject all leave requests, view company-wide performance metrics, and manage future billing/subscriptions.
 2. **Tier 2 — Department Manager (`access_level = 2`, role `EMPLOYEE`)**:
    - Supervises direct reports.
-   - Powers: Assign tasks to direct reports, edit task metadata for direct reports, monitor direct reports' task completion, view team leave schedules (view-only), and review aggregated team performance analytics.
+   - Powers: Assign tasks to direct reports, update status of own assigned tasks, monitor direct reports' task completion, view team leave schedules (view-only), and review aggregated team performance analytics.
 3. **Tier 3 — Team Lead (`access_level = 3`, role `EMPLOYEE`)**:
    - Senior individual contributors who also have direct reports.
    - Powers: Execute personal tasks, delegate tasks down their direct-reporting chain, view sub-team leaves (view-only), and view personal and team analytics.
@@ -88,8 +88,6 @@ C:\Users\ankus\Desktop\Employee Task Management\
 │   ├── BACKEND.md                      # Comprehensive backend architecture reference documentation
 │   ├── FRONTEND.md                     # Comprehensive frontend architecture reference documentation
 │   ├── screenshots/                    # Application UI screenshots (login, tasks, team, performance, leaves)
-│   ├── INTERVIEW_PREP.md               # Technical interview notes and sync vs async trade-offs
-│   ├── PROJECT_MASTERY.md              # Detailed architecture blueprint, feature map, and modification guide
 │   ├── TEAMLOOM_SAAS_REQUIREMENTS.md   # SaaS specifications (Slices 1-11, multi-tenancy, Razorpay billing roadmap)
 │   ├── archive/
 │   │   └── test_report_2026_07_28.md   # Historical manual QA test run report from July 28, 2026 (54 tests)

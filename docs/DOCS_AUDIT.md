@@ -12,9 +12,9 @@ A recursive search across all directories (excluding `node_modules` and `.pytest
 2. `BACKEND.md` (Project root)
 3. `FRONTEND.md` (Project root)
 4. `PRD.md` (Project root)
-5. `docs/PROJECT_MASTERY.md`
+5. `docs/PROJECT_MASTERY.md` *(Local only — excluded via `.gitignore`)*
 6. `docs/TEAMLOOM_SAAS_REQUIREMENTS.md`
-7. `docs/INTERVIEW_PREP.md`
+7. `docs/INTERVIEW_PREP.md` *(Local only — excluded via `.gitignore`)*
 8. `docs/test_report.md`
 9. `frontend/README.md`
 
@@ -78,20 +78,21 @@ A recursive search across all directories (excluding `node_modules` and `.pytest
   2. *Employee Code Format*: Section 2.2 references `"sequential employee codes (EMP-1001)"`, which was deprecated and replaced by 10-digit random numeric codes in Slice 4a.
   3. *Missing Multi-Tenancy*: Does not specify tenant isolation, `organization_id` foreign keys, or the SaaS billing roadmap.
 - **Recommendation**: **Update & Merge**
-  - Update `PRD.md` to reflect the multi-tenant SaaS architecture, or consolidate its persona and authority matrix directly into `docs/PROJECT_MASTERY.md` and `docs/TEAMLOOM_SAAS_REQUIREMENTS.md`.
+  - Update `PRD.md` to reflect the multi-tenant SaaS architecture, or consolidate its persona and authority matrix directly into `docs/PROJECT_OVERVIEW.md` and `docs/TEAMLOOM_SAAS_REQUIREMENTS.md`.
 
 ---
 
-### File 5: `docs/PROJECT_MASTERY.md`
-- **Path**: `C:\Users\ankus\Desktop\Employee Task Management\docs\PROJECT_MASTERY.md`
+### File 5: `docs/PROJECT_MASTERY.md` *(Local Gitignored Reference)*
+- **Path**: `docs/PROJECT_MASTERY.md` *(Excluded from git via `.gitignore`)*
+- **Notice**: Excluded from repository tracking via `.gitignore`. Retained on local workstations for personal development reference.
 - **What it says**:
   Exhaustive 265-line master blueprint and developer walkthrough manual. Contains ASCII architecture diagrams, database schema overviews, route tables, test suite breakdown, and step-by-step code modification recipes for adding new features.
 - **Verdict**: **Accurate**
 - **Evidence Comparing Against Real Code**:
   - Fully synced with Slice 4d (recent git commit `fe8c11d: docs: restore requirements sections 1 and 2, sync test coverage, and clarify latency fix`).
   - Correctly details the 6 database models, random 10-digit user codes, dual-mode login, and background task email delivery.
-- **Recommendation**: **Keep**
-  - This is one of the highest-value documentation files in the repository for developer onboarding and codebase mastery.
+- **Recommendation**: **Retain Locally**
+  - Valuable onboarding reference for local developers; kept gitignored per project policy.
 
 ---
 
@@ -108,16 +109,17 @@ A recursive search across all directories (excluding `node_modules` and `.pytest
 
 ---
 
-### File 7: `docs/INTERVIEW_PREP.md`
-- **Path**: `C:\Users\ankus\Desktop\Employee Task Management\docs\INTERVIEW_PREP.md`
+### File 7: `docs/INTERVIEW_PREP.md` *(Local Gitignored Reference)*
+- **Path**: `docs/INTERVIEW_PREP.md` *(Excluded from git via `.gitignore`)*
+- **Notice**: Excluded from repository tracking via `.gitignore`. Retained on local workstations for personal interview preparation notes.
 - **What it says**:
   Contains talking points, technical interview Q&A, and architectural trade-off explanations regarding sync vs. async Python (`asyncpg`, `AsyncSession`, event loop concurrency) and Docker containerization (multi-stage builds, non-root users, layer caching).
 - **Verdict**: **Partially Outdated**
 - **Evidence Comparing Against Real Code**:
   1. *Test Database Claim Inaccuracy*: Line 15 states that the project uses an `"aiosqlite in-memory database"` for Pytest. In reality, Slice 1 completely replaced SQLite with real PostgreSQL on Docker (`conftest.py` connects to `postgresql+asyncpg://postgres:postgres@localhost:5433/employee_task_test_db`).
   2. *Missing Multi-Tenancy Talking Points*: Does not mention multi-tenancy, tenant data isolation, or optimistic concurrency control.
-- **Recommendation**: **Update**
-  - Correct the test database explanation (PostgreSQL container with Alembic migrations instead of `aiosqlite`) and add interview sections covering tenant isolation and optimistic concurrency.
+- **Recommendation**: **Retain Locally**
+  - Kept gitignored per project policy; local copy updated with PostgreSQL test setup, tenant isolation, and optimistic concurrency notes.
 
 ---
 
@@ -155,10 +157,10 @@ A recursive search across all directories (excluding `node_modules` and `.pytest
 | `README.md` | Public repository overview & quickstart | **Partially Outdated** | **Updated**: Synced test count to 205, removed passlib & EMP-1001, added 10-digit codes & signup/verify flows. |
 | `docs/BACKEND.md` | Authoritative backend architectural reference | **Accurate** | **Moved & Tracked**: Moved from root to `docs/BACKEND.md`, removed from `.gitignore`, and staged in git. |
 | `docs/FRONTEND.md` | Authoritative frontend architectural reference | **Accurate** | **Moved & Tracked**: Moved from root to `docs/FRONTEND.md`, removed from `.gitignore`, and staged in git. |
-| `PRD.md` | Product Requirements Document (v1-v3) | **Partially Outdated** | **Merged & Deleted**: Persona matrix, authority rules, and trade-offs merged into `docs/PROJECT_MASTERY.md`; file removed. |
-| `docs/PROJECT_MASTERY.md` | Comprehensive system manual & extension recipes | **Accurate** | **Updated & Kept**: Augmented with PRD persona matrix, multi-tenant authority tiers, and trade-offs. |
+| `PRD.md` | Product Requirements Document (v1-v3) | **Partially Outdated** | **Merged & Deleted**: Persona matrix, authority rules, and trade-offs merged into project documentation; file removed. |
+| `docs/PROJECT_MASTERY.md` *(Gitignored)* | Comprehensive system manual & extension recipes | **Accurate** | **Retained Locally**: Excluded from git via `.gitignore`; kept locally for personal reference. |
 | `docs/TEAMLOOM_SAAS_REQUIREMENTS.md` | SaaS multi-tenancy & billing specification | **Accurate** | **Kept**: Canonical product roadmap. |
-| `docs/INTERVIEW_PREP.md` | Technical concepts & interview talking points | **Partially Outdated** | **Updated**: Corrected `aiosqlite` $\rightarrow$ PostgreSQL test setup; added tenant isolation & HTTP 409 concurrency sections. |
+| `docs/INTERVIEW_PREP.md` *(Gitignored)* | Technical concepts & interview talking points | **Partially Outdated** | **Retained Locally**: Excluded from git via `.gitignore`; kept locally for personal reference. |
 | `docs/archive/test_report_2026_07_28.md` | QA test execution report from July 28, 2026 | **Outdated** | **Archived**: Moved to `docs/archive/test_report_2026_07_28.md` with historical snapshot header. |
 | `frontend/README.md` | Default Vite template boilerplate | **Useless** | **Replaced**: Replaced with 2-line pointer to `docs/FRONTEND.md`. |
 
