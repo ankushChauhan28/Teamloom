@@ -36,25 +36,29 @@
   * **Slice 4b**: Dual-mode login (`ADMIN` via email, `EMPLOYEE` via User ID) enforced on server.
   * **Slice 4c**: Self-serve signup (`pending_payment`) and background email verification.
   * **Slice 4d**: Frontend auth UI (mode toggle, signup form, verification page, unverified notice).
-* **Pending Slices**: Slice 4e (employee invite flow), Slice 5 (isolation test suite), Slices 6–10 (Razorpay billing, lifecycle, invoices, operator CLI), and Slice 11 (go-live checklist).
+* **Pending Slices**: Stabilization batch (Slice 5 isolation tests), Slice 4e (employee invite flow), Slices 6–10 (Razorpay billing, lifecycle, invoices, operator CLI), and Slice 11 (go-live checklist).
 * **Alembic Head Revision**: `n4o5p6q7r8s9` (`slice4c_backfill_email_verification`).
 * **Test Suite Health**: **205 collected tests** via `pytest --collect-only -q` (100% passing in CI).
 
 ---
 
-## 4. Locked Architectural Decisions & Stabilization Order
-1. **Slice 4e Precedes Slice 6**: Employee invite flow (one-time set-password token, admin Resend/Revoke, no temp passwords) must ship before Slice 5 isolation tests and Slice 6 billing seat caps.
+## 4. Locked Architectural Decisions & Delivery Order
+1. **Target Execution Order (Owner's Plan)**:
+   * **Phase 1: Stabilization Batch**:
+     1. `fix/db-indexes` (add missing foreign key and search indexes).
+     2. `fix/supervisor-deactivation` (require subordinate reassignment before deactivation; return HTTP 409 with affected list).
+     3. `feat/soft-delete-tasks-leaves` (soft-delete columns and scoped filters for tasks and leaves; `audit_logs` table deferred).
+     4. `test/tenant-isolation-suite` (Slice 5 multi-tenant isolation tests for existing routes).
+   * **Phase 2: Slice 4e (Employee Invite Flow)**:
+     * One-time set-password invite link (hashed, single-use, 24h expiring token), admin Resend/Revoke in roster, no temp passwords. Updates isolation suite to cover invite endpoints. Ships before Slice 6 so seat caps apply to invites cleanly.
+   * **Phase 3: Slice 6 (Plans & Billing)**:
+     * Plan subscription model, `pending_payment` access gating, race-safe seat limit enforcement.
+   *(Note: `docs/TEAMLOOM_SAAS_REQUIREMENTS.md` originally suggested Slice 4e -> Slice 5 -> Slice 6; the owner's plan prioritizes codebase stabilization and lands the Slice 5 isolation test suite first, followed by Slice 4e and Slice 6).*
 2. **Supervisor Deactivation Safety**: Deactivating a supervisor must **not** silently set direct reports' `reports_to_id = NULL`. The API must require the admin to reassign subordinates first, returning HTTP 409 Conflict with the subordinate list if reassignment is needed.
 3. **Soft-Delete for Tasks & Leaves**: Tasks and leave requests will transition to soft-deletion (`is_deleted`, `deleted_at`, `deleted_by`). An independent `audit_logs` table is deferred to a later SaaS slice.
 4. **Rate Limiting**: **Open decision / Under discussion**.
    * *Current state*: In-memory sliding-window limiter (`InMemoryRateLimiter`) keyed strictly by client IP (`10 requests / 15 min` on `/auth/login`, `/auth/signup`, `/auth/resend-verification`).
    * *Open questions*: Whether to introduce a compound key `{IP, identifier}` for login/signup/resend (to prevent a single corporate NAT IP from locking out an entire organization), whether to add a loose per-IP ceiling against distributed password spraying, and whether to migrate algorithmically from sliding window to token bucket. Redis is a later operational step for multi-worker horizontal scaling, not decided now.
-5. **Stabilization Branch Order**:
-   1. `fix/db-indexes` (add missing foreign key and search indexes).
-   2. `fix/supervisor-deactivation` (prevent silent subordinate orphan on supervisor deactivation).
-   3. `feat/soft-delete-tasks-leaves` (implement soft delete columns and scoped filter).
-   4. `test/tenant-isolation-suite` (Slice 5 multi-tenant leak tests).
-   5. Rate limiting implementation once decided.
 
 ---
 
@@ -63,7 +67,10 @@
 * **Branch Base**: Always branch from an up-to-date `main`. Never commit directly to `main`.
 * **Commit Style**: Use conventional commit messages (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`).
 * **PR Process**: Push the branch to `origin`, but **do not open the Pull Request** (the repository owner opens and reviews PRs on GitHub).
-* **CI Quality Gate**: All GitHub Actions CI checks (Pytest, Ruff, ESLint, Vite build) must pass green before merge.
+* **CI Quality Gate**: GitHub Actions (`.github/workflows/ci.yml`) runs on push and PR, executing strictly:
+  1. `alembic upgrade head` (database migration validation on PostgreSQL 16 service).
+  2. `pytest --cov=app --cov-report=term-missing` (backend test suite on isolated test DB).
+  *Note: Frontend linting (`npm run lint` using `oxlint`) and frontend build (`npm run build` using `vite build`) are **not** part of CI and must be validated locally before pushing. Python `ruff` is also not currently in CI.*
 * **Migration Discipline**: **Never edit or rename existing Alembic migration files**. Always generate a new forward migration (`alembic revision --autogenerate -m "..."`).
 * **Code Verification**: Always inspect actual code and configuration files before modifying them; do not assume or invent facts.
 * **Context Maintenance**: Update Section 3 of this document (`docs/AI_CONTEXT.md`) at the conclusion of every PR.
