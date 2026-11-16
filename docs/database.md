@@ -115,7 +115,7 @@ The database comprises **6 application tables** (plus Alembic's internal `alembi
 | `hashed_password` | `VARCHAR` | **No** | None | |
 | `role` | `VARCHAR` (Enum `userrole`) | **No** | `'EMPLOYEE'` | DEPRECATED in code; retained for backward compatibility |
 | `access_level` | `INTEGER` | **No** | `3` | `CHECK (access_level >= 1 AND access_level <= 4)` (`check_user_access_level`) |
-| `reports_to_id` | `INTEGER` | Yes | `NULL` | **FOREIGN KEY** $\rightarrow$ `users.id` (`ON DELETE SET NULL`) |
+| `reports_to_id` | `INTEGER` | Yes | `NULL` | **FOREIGN KEY** $\rightarrow$ `users.id` (`ON DELETE SET NULL`), Index: `ix_users_reports_to_id` |
 | `designation` | `VARCHAR(255)` | Yes | `NULL` | |
 | `employee_code` | `VARCHAR` | Yes | `NULL` | **UNIQUE** (`uq_users_employee_code`), `CHECK (employee_code IS NULL OR employee_code ~ '^[0-9]{10}$')` |
 | `is_email_verified`| `BOOLEAN` | **No** | `false` | |
@@ -133,6 +133,7 @@ The database comprises **6 application tables** (plus Alembic's internal `alembi
   - `ix_users_email`: B-tree index on `email`.
   - `ix_users_email_lower`: **Unique functional index** on `LOWER(email)` (added in `m3n4o5p6q7r8`).
   - `ix_users_employee_code`: Unique B-tree index on `employee_code`.
+  - `ix_users_reports_to_id`: B-tree index on `reports_to_id` (added in `o5p6q7r8s9t0`).
   - `ix_users_organization_id`: B-tree index on `organization_id`.
 - **Foreign Keys**:
   - `fk_users_reports_to_id_users`: `reports_to_id` references `users.id` (`ON DELETE SET NULL`).
@@ -155,7 +156,7 @@ The database comprises **6 application tables** (plus Alembic's internal `alembi
 | `due_datetime` | `TIMESTAMP WITH TIME ZONE` | **No** | None | Converted from Date to DateTime in `c3d4e5f6g7h8` |
 | `completed_at` | `TIMESTAMP WITH TIME ZONE` | Yes | `NULL` | Populated automatically on status transition to COMPLETED |
 | `version` | `INTEGER` | **No** | `1` | Optimistic locking counter (`version_id_col`) |
-| `assigned_to` | `INTEGER` | **No** | None | **FOREIGN KEY** $\rightarrow$ `users.id` (`ON DELETE CASCADE`) |
+| `assigned_to` | `INTEGER` | **No** | None | **FOREIGN KEY** $\rightarrow$ `users.id` (`ON DELETE CASCADE`), Index: `ix_tasks_assigned_to` |
 | `created_by` | `INTEGER` | **No** | None | **FOREIGN KEY** $\rightarrow$ `users.id` (`ON DELETE CASCADE`) |
 | `organization_id` | `INTEGER` | **No** | None | **FOREIGN KEY** $\rightarrow$ `organizations.id` (`ON DELETE CASCADE`), Index: `ix_tasks_organization_id` |
 | `created_at` | `TIMESTAMP WITH TIME ZONE` | **No** | `NOW()` | Server default |
@@ -163,8 +164,9 @@ The database comprises **6 application tables** (plus Alembic's internal `alembi
 - **Indexes**:
   - `pk_tasks`: Primary key on `id`.
   - `ix_tasks_id`: B-tree index on `id`.
+  - `ix_tasks_assigned_to`: B-tree index on `assigned_to` (added in `o5p6q7r8s9t0`).
   - `ix_tasks_organization_id`: B-tree index on `organization_id`.
-  - *Missing Indexes (Risk)*: Neither `assigned_to` nor `(organization_id, status)` currently have dedicated indexes. (See section 8).
+  - `ix_tasks_organization_id_status`: Composite B-tree index on `(organization_id, status)` (added in `o5p6q7r8s9t0`).
 - **Foreign Keys**:
   - `fk_tasks_assigned_to_users`: `assigned_to` references `users.id` (`ON DELETE CASCADE`).
   - `fk_tasks_created_by_users`: `created_by` references `users.id` (`ON DELETE CASCADE`).
@@ -180,7 +182,7 @@ The database comprises **6 application tables** (plus Alembic's internal `alembi
 | Column Name | Data Type | Nullable | Default | Constraints & Checks |
 |---|---|---|---|---|
 | `id` | `INTEGER` | **No** | Auto-increment sequence | **PRIMARY KEY** |
-| `employee_id` | `INTEGER` | **No** | None | **FOREIGN KEY** $\rightarrow$ `users.id` (`ON DELETE CASCADE`) |
+| `employee_id` | `INTEGER` | **No** | None | **FOREIGN KEY** $\rightarrow$ `users.id` (`ON DELETE CASCADE`), Index: `ix_leave_requests_employee_id` |
 | `reason` | `VARCHAR` | **No** | None | |
 | `start_date` | `DATE` | **No** | None | Validated in service: `start_date <= end_date` |
 | `end_date` | `DATE` | **No** | None | |
@@ -192,7 +194,9 @@ The database comprises **6 application tables** (plus Alembic's internal `alembi
 - **Indexes**:
   - `pk_leave_requests`: Primary key on `id`.
   - `ix_leave_requests_id`: B-tree index on `id`.
+  - `ix_leave_requests_employee_id`: B-tree index on `employee_id` (added in `o5p6q7r8s9t0`).
   - `ix_leave_requests_organization_id`: B-tree index on `organization_id`.
+  - `ix_leave_requests_organization_id_status`: Composite B-tree index on `(organization_id, status)` (added in `o5p6q7r8s9t0`).
 - **Foreign Keys**:
   - `fk_leave_requests_employee_id_users`: `employee_id` references `users.id` (`ON DELETE CASCADE`).
   - `fk_leave_requests_reviewed_by_users`: `reviewed_by` references `users.id` (`ON DELETE SET NULL`).
@@ -356,7 +360,7 @@ erDiagram
 
 ## 5. Migrations & Schema Drift Audit
 
-The migration chain consists of **16 linear revisions** managed via Alembic:
+The migration chain consists of **17 linear revisions** managed via Alembic:
 
 | Step | Revision ID | Down Revision | Script File | Summary of Changes |
 |:---:|---|---|---|---|
@@ -376,6 +380,7 @@ The migration chain consists of **16 linear revisions** managed via Alembic:
 | 14 | `l2m3n4o5p6q7` | `k1l2m3n4o5p6` | `l2m3n4o5p6q7_add_organizations_and_backfill_data.py` | Added `organizations`, added `organization_id` to tables, backfilled default org |
 | 15 | `m3n4o5p6q7r8` | `l2m3n4o5p6q7` | `m3n4o5p6q7r8_slice4a_user_ids_email_verification.py` | 10-digit random IDs, dropped `employee_code_seq`, added `email_verification_tokens`, lower(email) index |
 | 16 | `n4o5p6q7r8s9` | `m3n4o5p6q7r8` | `n4o5p6q7r8s9_slice4c_backfill_email_verification.py` | Backfilled `is_email_verified = true` for legacy accounts |
+| 17 | `o5p6q7r8s9t0` | `n4o5p6q7r8s9` | `o5p6q7r8s9t0_add_missing_indexes_for_performance.py` | Added missing query & foreign key indexes: `ix_tasks_assigned_to`, `ix_tasks_organization_id_status`, `ix_leave_requests_employee_id`, `ix_leave_requests_organization_id_status`, `ix_users_reports_to_id` |
 
 ### Identified Migration Drift & Anomalies:
 1. **Critical File Misnaming Anomaly (`104551d9fda5`)**:
@@ -421,10 +426,13 @@ The migration chain consists of **16 linear revisions** managed via Alembic:
 
 ## 8. Data Integrity & Operational Risks
 
-### 8.1 Missing Indexes (Performance & Locking Risk)
-- **`tasks.assigned_to`**: Not indexed. When an employee loads `/dashboard` (`WHERE assigned_to = :id`), PostgreSQL must perform a sequential scan of `tasks` once table size grows large.
-- **`tasks(organization_id, status)`**: Missing composite index. Filtering tasks by status in large organizations will trigger sequential table scans.
-- **`leave_requests.employee_id`**: Not indexed. Loading personal leave history requires scanning the table.
+### 8.1 Missing Indexes (Resolved in `o5p6q7r8s9t0`)
+All missing foreign key and composite query indexes identified in the initial audit were implemented in migration `o5p6q7r8s9t0`:
+- **`tasks.assigned_to`**: Indexed via `ix_tasks_assigned_to`. Optimizes personal dashboard task lookups (`/dashboard`), team task filtering (`/my-team`), and foreign key cascade deletion locks.
+- **`tasks(organization_id, status)`**: Indexed via composite `ix_tasks_organization_id_status`. Optimizes administrative task filtering by status across large tenant organizations.
+- **`leave_requests.employee_id`**: Indexed via `ix_leave_requests_employee_id`. Optimizes personal leave history queries and leave overlap checks.
+- **`leave_requests(organization_id, status)`**: Indexed via composite `ix_leave_requests_organization_id_status`. Optimizes the administrative leave review queue (`/admin/leaves?status=PENDING`).
+- **`users.reports_to_id`**: Indexed via `ix_users_reports_to_id`. Optimizes hierarchy lookups, direct reports resolution, team hubs, and supervisory reporting chain updates.
 
 ### 8.2 Lack of Soft Deletion on Core Entities
 - **Tasks**: `DELETE /tasks/{id}` executes hard database deletion (`db.delete(db_task)`). If an admin accidentally deletes a task, associated audit trails and history are permanently lost.

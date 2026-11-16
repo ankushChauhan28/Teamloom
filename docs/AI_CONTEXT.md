@@ -37,7 +37,7 @@
   * **Slice 4c**: Self-serve signup (`pending_payment`) and background email verification.
   * **Slice 4d**: Frontend auth UI (mode toggle, signup form, verification page, unverified notice).
 * **Pending Slices**: Stabilization batch (Slice 5 isolation tests), Slice 4e (employee invite flow), Slices 6–10 (Razorpay billing, lifecycle, invoices, operator CLI), and Slice 11 (go-live checklist).
-* **Alembic Head Revision**: `n4o5p6q7r8s9` (`slice4c_backfill_email_verification`).
+* **Alembic Head Revision**: `o5p6q7r8s9t0` (`add_missing_indexes_for_performance`).
 * **Test Suite Health**: **205 collected tests** via `pytest --collect-only -q` (100% passing in CI).
 
 ---
@@ -45,7 +45,7 @@
 ## 4. Locked Architectural Decisions & Delivery Order
 1. **Target Execution Order (Owner's Plan)**:
    * **Phase 1: Stabilization Batch**:
-     1. `fix/db-indexes` (add missing foreign key and search indexes).
+     1. `fix/db-indexes` (add missing foreign key and search indexes — Completed).
      2. `fix/supervisor-deactivation` (require subordinate reassignment before deactivation; return HTTP 409 with affected list).
      3. `feat/soft-delete-tasks-leaves` (soft-delete columns and scoped filters for tasks and leaves; `audit_logs` table deferred).
      4. `test/tenant-isolation-suite` (Slice 5 multi-tenant isolation tests for existing routes).
