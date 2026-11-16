@@ -46,7 +46,9 @@
 1. **Slice 4e Precedes Slice 6**: Employee invite flow (one-time set-password token, admin Resend/Revoke, no temp passwords) must ship before Slice 5 isolation tests and Slice 6 billing seat caps.
 2. **Supervisor Deactivation Safety**: Deactivating a supervisor must **not** silently set direct reports' `reports_to_id = NULL`. The API must require the admin to reassign subordinates first, returning HTTP 409 Conflict with the subordinate list if reassignment is needed.
 3. **Soft-Delete for Tasks & Leaves**: Tasks and leave requests will transition to soft-deletion (`is_deleted`, `deleted_at`, `deleted_by`). An independent `audit_logs` table is deferred to a later SaaS slice.
-4. **Rate Limiting**: **Open decision / Under discussion** (evaluating Redis sliding-window vs distributed token bucket).
+4. **Rate Limiting**: **Open decision / Under discussion**.
+   * *Current state*: In-memory sliding-window limiter (`InMemoryRateLimiter`) keyed strictly by client IP (`10 requests / 15 min` on `/auth/login`, `/auth/signup`, `/auth/resend-verification`).
+   * *Open questions*: Whether to introduce a compound key `{IP, identifier}` for login/signup/resend (to prevent a single corporate NAT IP from locking out an entire organization), whether to add a loose per-IP ceiling against distributed password spraying, and whether to migrate algorithmically from sliding window to token bucket. Redis is a later operational step for multi-worker horizontal scaling, not decided now.
 5. **Stabilization Branch Order**:
    1. `fix/db-indexes` (add missing foreign key and search indexes).
    2. `fix/supervisor-deactivation` (prevent silent subordinate orphan on supervisor deactivation).
