@@ -1,6 +1,15 @@
 import enum
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+)
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -28,7 +37,9 @@ class User(Base):
         default=3,
         nullable=False,
     )
-    reports_to_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    reports_to_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     designation = Column(String(255), nullable=True, default=None)
     employee_code = Column(
         String,
@@ -53,6 +64,10 @@ class User(Base):
         index=True,
     )
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("ix_users_email_lower", func.lower(email), unique=True),
+    )
 
     # Relationships (relationships mapped as strings to avoid circular import issues)
     organization = relationship("Organization", back_populates="users")

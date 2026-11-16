@@ -1,6 +1,6 @@
 import enum
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -32,7 +32,10 @@ class Task(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
     version: Mapped[int] = mapped_column(default=1)
     __mapper_args__ = {"version_id_col": version}
-    assigned_to = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    __table_args__ = (Index("ix_tasks_organization_id_status", "organization_id", "status"),)
+    assigned_to = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     created_by = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     organization_id = Column(
         Integer,
