@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, Response, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.email import send_employee_welcome_email
@@ -9,6 +9,7 @@ from app.models.user import User, UserRole
 from app.schemas.user import (
     EmployeeCreate,
     EmployeeCreateResponse,
+    UserDeactivateRequest,
     UserRead,
     UserReportsToUpdate,
     UserUpdate,
@@ -224,6 +225,7 @@ async def set_user_reports_to(
 @router.patch("/{user_id}/deactivate", response_model=UserRead)
 async def deactivate_user(
     user_id: int,
+    deactivate_in: UserDeactivateRequest | None = Body(None),
     db: AsyncSession = Depends(get_db),
     current_admin: User = Depends(check_access_level_dependency(1)),
 ):
@@ -236,6 +238,7 @@ async def deactivate_user(
         current_admin_id=current_admin.id,
         target_user_id=user_id,
         organization_id=current_admin.organization_id,
+        deactivate_in=deactivate_in,
     )
 
 

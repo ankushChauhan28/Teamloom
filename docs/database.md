@@ -438,17 +438,9 @@ All missing foreign key and composite query indexes identified in the initial au
 - **Tasks**: `DELETE /tasks/{id}` executes hard database deletion (`db.delete(db_task)`). If an admin accidentally deletes a task, associated audit trails and history are permanently lost.
 - **Leaves**: No soft deletion.
 
-### 8.3 Deactivation Disconnects Hierarchy
-- In `app/services/user_service.py:344` (`deactivate_user`):
-  When a supervisor is deactivated (`is_active = False`), all direct reports have their `reports_to_id` set to `NULL`:
-  ```python
-  await db.execute(
-      update(User)
-      .where(User.reports_to_id == target_user_id)
-      .values(reports_to_id=None)
-  )
-  ```
-  - *Risk*: If the deactivated supervisor is subsequently reactivated (`PATCH /users/{id}/reactivate`), the reporting relationships are **not** restored. Direct reports remain unassigned orphans (`reports_to_id = NULL`) and must be manually reassigned one-by-one by the administrator.
+### 8.3 Deactivation Hierarchy Protection (Resolved in `fix/supervisor-deactivation`)
+- Previously, `deactivate_user` silently executed a bulk update nulling `reports_to_id` on all direct reports.
+- Resolved: Deactivation now strictly validates subordinate reassignments in a single atomic transaction. If active direct reports are not resolved, the operation aborts with HTTP 409 Conflict without altering database state. Reactivation does not need to restore links because active links are never silently wiped.
 
 ### 8.4 User ID Random Collision Loop Cap
 - User IDs are 10-digit random strings (`secrets.randbelow(10**10)`).

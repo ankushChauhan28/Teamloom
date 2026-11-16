@@ -134,29 +134,69 @@ function SupervisorChangeModal({ isOpen, onClose, onSuccess, employee, employees
   );
 }
 
-/* Modal to confirm employee removal */
-function RemoveConfirmModal({ isOpen, onClose, onConfirm, employee }) {
+/* Modal to confirm employee removal & reassign direct reports if conflict arises */
+function RemoveConfirmModal({ isOpen, onClose, onConfirm, employee, allEmployees = [] }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [serverError, setServerError] = useLoggedState('', `RemoveModal(${employee?.id}).serverError`);
+  const [unresolvedSubordinates, setUnresolvedSubordinates] = useState(null);
+  const [reassignments, setReassignments] = useState({});
 
   useEffect(() => {
     console.log(`[RemoveModal Mounted] employee.id: ${employee?.id}, employee.name: "${employee?.full_name}", isOpen: ${isOpen}`);
-  }, [employee, isOpen]);
+    setUnresolvedSubordinates(null);
+    setReassignments({});
+    setServerError('');
+  }, [employee, isOpen, setServerError]);
 
   if (!isOpen || !employee) return null;
+
+  const availableManagers = (allEmployees || []).filter(
+    (u) => u.is_active && u.id !== employee.id
+  );
+
+  const handleSubordinateChange = (subId, managerId) => {
+    setReassignments((prev) => ({
+      ...prev,
+      [subId]: managerId,
+    }));
+  };
 
   const handleRemove = async (e) => {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
     }
-    console.log(`[RemoveModal CONFIRMED] "Remove Employee" button clicked inside modal for User #${employee.id} (${employee.full_name})`);
     setIsSubmitting(true);
     setServerError('');
+
     try {
-      await onConfirm(employee);
+      if (unresolvedSubordinates && unresolvedSubordinates.length > 0) {
+        // Reassignment step
+        const mapping = {};
+        unresolvedSubordinates.forEach((sub) => {
+          const val = reassignments[sub.id];
+          mapping[sub.id] = (val && val !== '') ? Number(val) : null;
+        });
+        await onConfirm(employee, { reassignments: mapping });
+      } else {
+        // Initial deactivation attempt
+        await onConfirm(employee);
+      }
       onClose();
     } catch (err) {
+      if (err.response?.status === 409) {
+        const subs = err.response?.data?.unresolved_subordinates || err.response?.data?.subordinates || [];
+        if (subs.length > 0) {
+          setUnresolvedSubordinates(subs);
+          const initialMap = {};
+          subs.forEach((s) => {
+            initialMap[s.id] = '';
+          });
+          setReassignments(initialMap);
+          setServerError('');
+          return;
+        }
+      }
       const msg = err.response?.data?.detail || 'Failed to remove employee.';
       console.error(`[RemoveModal Error] Removal failed for User #${employee.id}:`, msg);
       setServerError(typeof msg === 'string' ? msg : JSON.stringify(msg));
@@ -165,11 +205,13 @@ function RemoveConfirmModal({ isOpen, onClose, onConfirm, employee }) {
     }
   };
 
+  const isReassignmentMode = Boolean(unresolvedSubordinates && unresolvedSubordinates.length > 0);
+
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Remove Employee"
+      title={isReassignmentMode ? 'Reassign Direct Reports' : 'Remove Employee'}
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={isSubmitting}>
@@ -179,8 +221,10 @@ function RemoveConfirmModal({ isOpen, onClose, onConfirm, employee }) {
             {isSubmitting ? (
               <span className="flex items-center gap-2">
                 <Spinner size="sm" />
-                Removing...
+                {isReassignmentMode ? 'Reassigning...' : 'Removing...'}
               </span>
+            ) : isReassignmentMode ? (
+              'Reassign & Remove Employee'
             ) : (
               'Remove Employee'
             )}
@@ -191,16 +235,71 @@ function RemoveConfirmModal({ isOpen, onClose, onConfirm, employee }) {
       <div className="space-y-3">
         {serverError && <Alert variant="danger">{serverError}</Alert>}
 
-        <div className="flex items-start gap-3 p-3 rounded-lg bg-[var(--red)]/10 border border-[var(--red)]/20 text-xs text-[var(--red)]">
-          <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
-          <div>
-            <p className="font-semibold text-sm mb-1">Confirm Employee Removal</p>
-            <p className="text-[11px] opacity-90 leading-relaxed">
-              Are you sure you want to remove <span className="font-bold">{employee.full_name}</span> ({employee.employee_code || employee.email})?
-              This will immediately revoke their ability to log in. Any direct reports managed by this employee will be set to top-level (no supervisor). Historical tasks and leave records will remain untouched.
-            </p>
+        {isReassignmentMode ? (
+          <div className="space-y-4">
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-[var(--yellow)]/10 border border-[var(--yellow)]/20 text-xs text-[var(--yellow)]">
+              <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-[var(--yellow)]" />
+              <div>
+                <p className="font-semibold text-sm mb-1 text-[var(--text-primary)]">
+                  Subordinates Require Reassignment
+                </p>
+                <p className="text-[11px] text-[var(--text-secondary)] leading-relaxed">
+                  <span className="font-semibold text-[var(--text-primary)]">{employee.full_name}</span> currently supervises {unresolvedSubordinates.length} active employee(s).
+                  Select a new supervisor for each person, or choose &quot;No manager&quot;.
+                </p>
+              </div>
+            </div>
+
+            <div className="max-h-60 overflow-y-auto space-y-3 pr-1">
+              {unresolvedSubordinates.map((sub) => {
+                const subOptions = [
+                  { value: '', label: '-- No manager (unassigned) --' },
+                  ...availableManagers
+                    .filter((u) => u.id !== sub.id)
+                    .map((u) => ({
+                      value: String(u.id),
+                      label: `${u.full_name}${u.designation ? ` (${u.designation})` : ''}`,
+                    })),
+                ];
+
+                return (
+                  <div
+                    key={sub.id}
+                    className="p-3 rounded-lg bg-[var(--surface-2)] border border-[var(--border)] space-y-2"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium text-xs text-[var(--text-primary)]">
+                        {sub.full_name}
+                      </span>
+                      {sub.designation && (
+                        <span className="text-[10px] text-[var(--text-muted)]">
+                          {sub.designation}
+                        </span>
+                      )}
+                    </div>
+                    <Select
+                      label="New Supervisor"
+                      options={subOptions}
+                      value={reassignments[sub.id] ?? ''}
+                      onChange={(e) => handleSubordinateChange(sub.id, e.target.value)}
+                    />
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="flex items-start gap-3 p-3 rounded-lg bg-[var(--red)]/10 border border-[var(--red)]/20 text-xs text-[var(--red)]">
+            <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold text-sm mb-1">Confirm Employee Removal</p>
+              <p className="text-[11px] opacity-90 leading-relaxed">
+                Are you sure you want to remove <span className="font-bold">{employee.full_name}</span> ({employee.employee_code || employee.email})?
+                This will immediately revoke their ability to log in. If this employee has active direct reports, you will be prompted to reassign them. Historical tasks and leave records will remain untouched.
+              </p>
+            </div>
+          </div>
+        )}
       </div>
     </Modal>
   );
@@ -342,10 +441,10 @@ export function AdminEmployeesPage() {
     }
   };
 
-  const handleRemoveConfirm = async (employee) => {
+  const handleRemoveConfirm = async (employee, reassignmentData = null) => {
     console.log(`[AdminEmployeesPage] Executing PATCH /users/${employee.id}/deactivate`);
     try {
-      await api.patch(`/users/${employee.id}/deactivate`);
+      await api.patch(`/users/${employee.id}/deactivate`, reassignmentData || undefined);
       console.log(`[AdminEmployeesPage] Deactivate request completed for User #${employee.id}`);
       fetchEmployees();
       setNotification({
@@ -727,6 +826,7 @@ export function AdminEmployeesPage() {
           onClose={() => setRemoveModalTarget(null)}
           onConfirm={handleRemoveConfirm}
           employee={removeModalTarget}
+          allEmployees={employees}
         />
       )}
     </div>

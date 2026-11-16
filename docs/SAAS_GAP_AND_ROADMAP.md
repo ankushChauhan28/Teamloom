@@ -149,15 +149,8 @@ The following audit matrix evaluates Teamloom's current codebase against the ind
 2. **Broken Legacy Verification Script**
    - **File**: `scripts/test_endpoints.py:52`
    - **Evidence**: Line 52 calls `POST /auth/register`, which was deleted when self-serve signup moved to `/auth/signup`. Running this script fails with HTTP 404/405.
-3. **Supervisor Deactivation Irreversibly Unlinks Direct Reports**
-   - **File**: `app/services/user_service.py:344-349`
-   - **Evidence**:
-     ```python
-     await db.execute(
-         update(User).where(User.reports_to_id == target_user_id).values(reports_to_id=None)
-     )
-     ```
-   - **Risk**: Deactivating a manager sets all their subordinates' `reports_to_id` to `NULL`. Reactivating the manager does not restore these links. Subordinates become permanent reporting orphans.
+3. **Supervisor Deactivation Irreversibly Unlinks Direct Reports (RESOLVED on `fix/supervisor-deactivation`)**
+   - **Resolution**: Removed silent bulk-nulling update. Deactivating a supervisor with active direct reports now accepts `UserDeactivateRequest` with explicit subordinate mappings or default manager (or explicit null). If unresolved active direct reports remain, the endpoint returns HTTP 409 Conflict with the unresolved list, preserving hierarchy integrity in a single atomic transaction.
 4. **Hard Delete on Tasks Destroys History**
    - **File**: `app/services/task_service.py:289`
    - **Evidence**: `await db.delete(db_task)`. Tasks lack an `is_deleted` soft-delete column. Accidental deletion is irrecoverable.

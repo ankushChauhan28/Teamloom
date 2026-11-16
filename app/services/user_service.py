@@ -1,23 +1,23 @@
 import asyncio
-from datetime import UTC, datetime
 import logging
 import secrets
 import string
+from datetime import UTC, datetime
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
     AppException,
     BadRequestException,
-    ResourceNotFoundException,
+    SupervisorDeactivationConflictException,
     UserAlreadyExistsException,
 )
 from app.core.security import hash_password
 from app.models.organization import Organization
 from app.models.user import User, UserRole
-from app.schemas.user import EmployeeCreate, UserUpdate
+from app.schemas.user import EmployeeCreate, UserDeactivateRequest, UserUpdate
 from app.services.common import get_scoped_or_404
 
 logger = logging.getLogger(__name__)
@@ -364,11 +364,15 @@ async def deactivate_user(
     current_admin_id: int,
     target_user_id: int,
     organization_id: int | None = None,
+    deactivate_in: UserDeactivateRequest | None = None,
 ) -> User:
     """
     Deactivates a user account (is_active = False).
     Admin cannot deactivate their own account.
-    Clears reports_to_id on any direct reports managed by the deactivated user within the same org.
+    If the user has active direct reports, requires explicit reassignment for all of them
+    (or a default_new_manager_id, or explicit null = no manager).
+    If any active direct reports are unresolved, raises SupervisorDeactivationConflictException (HTTP 409).
+    All reassignments and deactivation occur in a single atomic database transaction.
     """
     if current_admin_id == target_user_id:
         raise BadRequestException("An admin cannot deactivate their own account.")
@@ -381,29 +385,130 @@ async def deactivate_user(
         error_msg="User not found.",
     )
 
-    target_user.is_active = False
-
-    # Check if this user has active direct reports within the same org
-    count_conditions = [
+    # Query all active direct reports within the same organization
+    report_conditions = [
         User.reports_to_id == target_user_id,
         User.is_active.is_(True),
     ]
     if target_user.organization_id is not None:
-        count_conditions.append(User.organization_id == target_user.organization_id)
+        report_conditions.append(User.organization_id == target_user.organization_id)
 
-    count_stmt = select(func.count()).select_from(User).where(*count_conditions)
-    direct_reports_count = (await db.execute(count_stmt)).scalar() or 0
+    reports_stmt = select(User).where(*report_conditions).order_by(User.id.asc())
+    active_reports = list((await db.execute(reports_stmt)).scalars().all())
+    active_reports_dict = {report.id: report for report in active_reports}
 
-    if direct_reports_count > 0:
-        update_conditions = [User.reports_to_id == target_user_id]
-        if target_user.organization_id is not None:
-            update_conditions.append(User.organization_id == target_user.organization_id)
-        await db.execute(
-            update(User).where(*update_conditions).values(reports_to_id=None)
+    # Determine default reassignment (distinguishing 'field not provided' from 'explicitly null')
+    has_default = (
+        deactivate_in is not None
+        and "default_new_manager_id" in deactivate_in.model_fields_set
+    )
+    default_manager_id = deactivate_in.default_new_manager_id if has_default else None
+
+    raw_reassignments = (
+        deactivate_in.reassignments
+        if deactivate_in and deactivate_in.reassignments is not None
+        else {}
+    )
+
+    # Validate that all subordinates specified in raw_reassignments are active direct reports
+    for sub_id in raw_reassignments:
+        if sub_id not in active_reports_dict:
+            # Check if user exists in the org (raises 404 if not found or cross-org)
+            await get_scoped_or_404(
+                db=db,
+                model=User,
+                id_val=sub_id,
+                organization_id=target_user.organization_id,
+                error_msg="Subordinate user not found.",
+            )
+            raise BadRequestException(
+                f"User {sub_id} is not an active direct report of the user being deactivated."
+            )
+
+    # Resolve mapping for every active direct report
+    unresolved = []
+    resolved_mapping: dict[int, int | None] = {}
+    for report in active_reports:
+        if report.id in raw_reassignments:
+            resolved_mapping[report.id] = raw_reassignments[report.id]
+        elif has_default:
+            resolved_mapping[report.id] = default_manager_id
+        else:
+            unresolved.append(
+                {
+                    "id": report.id,
+                    "full_name": report.full_name,
+                    "designation": report.designation,
+                }
+            )
+
+    if unresolved:
+        raise SupervisorDeactivationConflictException(
+            message="Cannot deactivate user with active direct reports. Please reassign subordinates.",
+            unresolved_subordinates=unresolved,
         )
-        logger.info(
-            f"Cleared reports_to_id for {direct_reports_count} direct reports of deactivated supervisor (ID: {target_user_id})"
-        )
+
+    # Validate every new manager in resolved_mapping
+    managers_cache: dict[int, User] = {}
+    for sub_id, new_mgr_id in resolved_mapping.items():
+        if new_mgr_id is None:
+            continue
+
+        if new_mgr_id == sub_id:
+            raise BadRequestException("A user cannot report to themselves.")
+
+        if new_mgr_id == target_user_id:
+            raise BadRequestException("Cannot assign subordinate to the user being deactivated.")
+
+        if new_mgr_id not in managers_cache:
+            mgr = await get_scoped_or_404(
+                db=db,
+                model=User,
+                id_val=new_mgr_id,
+                organization_id=target_user.organization_id,
+                error_msg="Reports-to supervisor user not found.",
+            )
+            if not mgr.is_active:
+                raise BadRequestException(f"Proposed supervisor (ID: {new_mgr_id}) is inactive.")
+            managers_cache[new_mgr_id] = mgr
+
+    # Cycle detection across the new hierarchy graph
+    for sub_id, new_mgr_id in resolved_mapping.items():
+        if new_mgr_id is None:
+            continue
+
+        visited = {sub_id}
+        curr = new_mgr_id
+        while curr is not None:
+            if curr in visited:
+                raise BadRequestException("Circular reporting hierarchy is not allowed.")
+            visited.add(curr)
+
+            if curr in resolved_mapping:
+                curr = resolved_mapping[curr]
+            else:
+                if curr in managers_cache:
+                    curr_user = managers_cache[curr]
+                else:
+                    res = await db.execute(
+                        select(User).where(
+                            User.id == curr,
+                            User.organization_id == target_user.organization_id,
+                        )
+                    )
+                    curr_user = res.scalar_one_or_none()
+                    if curr_user:
+                        managers_cache[curr] = curr_user
+
+                if not curr_user or curr_user.reports_to_id is None:
+                    break
+                curr = curr_user.reports_to_id
+
+    # Apply all reassignments atomically
+    for report in active_reports:
+        report.reports_to_id = resolved_mapping[report.id]
+
+    target_user.is_active = False
 
     await db.commit()
     await db.refresh(target_user)
