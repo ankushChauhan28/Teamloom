@@ -54,7 +54,7 @@ The application stores different categories of data across dedicated infrastruct
 | **Passwords** | User authentication credentials | PostgreSQL (`users.hashed_password`) | **Bcrypt** hashed with individual random salt (`gensalt()`) |
 | **Email Verification Tokens** | Single-use registration activation tokens | PostgreSQL (`email_verification_tokens` table) | **SHA-256 hash** (`token_hash`); raw token never stored in DB |
 | **Token Invalidation Blacklist** | Revoked JWT identifiers (`jti`) and expiry timestamps | PostgreSQL (`revoked_tokens` table) | Unique index on `token_jti`; pruned every 24h |
-| **Tasks & Concurrency** | Title, description, status, priority, due datetime, completed_at, version | PostgreSQL (`tasks` table) | Plaintext; version checked for optimistic concurrency (409) |
+| **Tasks & Concurrency** | Title, description, status, priority, due datetime, completed_at, version, is_deleted, deleted_at, deleted_by | PostgreSQL (`tasks` table) | Plaintext; version checked for optimistic concurrency (409); soft delete columns (`is_deleted`, `deleted_at`, `deleted_by`) |
 | **Leave Requests** | Employee ID, date range, reason string, review status, reviewer ID | PostgreSQL (`leave_requests` table) | Plaintext |
 | **Rate Limit Counters** | IP request timestamps for sliding window | Process Memory (`InMemoryRateLimiter`) or Redis (`RedisRateLimiter` ZSET) | Ephemeral in-memory data (900s TTL) |
 | **File Storage / Uploads** | Avatars, task attachments, documents | **None / Not Supported** | The application does not currently collect or store binary files |
@@ -142,9 +142,9 @@ The database comprises **6 application tables** (plus Alembic's internal `alembi
 ---
 
 ### 3.3 Table: `tasks`
-- **Purpose**: Operational tasks, assignments, deadlines, priorities, and version-tracked status transitions.
+- **Purpose**: Operational tasks, assignments, deadlines, priorities, version-tracked status transitions, and soft-delete auditability.
 - **ORM Model**: `Task` (`app/models/task.py`)
-- **Migration History**: `f2850ec5859c` $\rightarrow$ `c3d4e5f6g7h8` $\rightarrow$ `i9j0k1l2m3n4` $\rightarrow$ `l2m3n4o5p6q7`
+- **Migration History**: `f2850ec5859c` $\rightarrow$ `c3d4e5f6g7h8` $\rightarrow$ `i9j0k1l2m3n4` $\rightarrow$ `l2m3n4o5p6q7` $\rightarrow$ `o5p6q7r8s9t0` $\rightarrow$ `p6q7r8s9t0u1`
 
 | Column Name | Data Type | Nullable | Default | Constraints & Checks |
 |---|---|---|---|---|
@@ -155,6 +155,9 @@ The database comprises **6 application tables** (plus Alembic's internal `alembi
 | `priority` | `VARCHAR` (Enum `taskpriority`) | **No** | None | Values: `'LOW'`, `'MEDIUM'`, `'HIGH'` |
 | `due_datetime` | `TIMESTAMP WITH TIME ZONE` | **No** | None | Converted from Date to DateTime in `c3d4e5f6g7h8` |
 | `completed_at` | `TIMESTAMP WITH TIME ZONE` | Yes | `NULL` | Populated automatically on status transition to COMPLETED |
+| `is_deleted` | `BOOLEAN` | **No** | `false` | Soft-delete flag (added in `p6q7r8s9t0u1`). Filtered by default across all active queries |
+| `deleted_at` | `TIMESTAMP WITH TIME ZONE` | Yes | `NULL` | Timestamp when soft-deleted (added in `p6q7r8s9t0u1`) |
+| `deleted_by` | `INTEGER` | Yes | `NULL` | **FOREIGN KEY** $\rightarrow$ `users.id` (`ON DELETE SET NULL`), user who deleted the task (added in `p6q7r8s9t0u1`) |
 | `version` | `INTEGER` | **No** | `1` | Optimistic locking counter (`version_id_col`) |
 | `assigned_to` | `INTEGER` | **No** | None | **FOREIGN KEY** $\rightarrow$ `users.id` (`ON DELETE CASCADE`), Index: `ix_tasks_assigned_to` |
 | `created_by` | `INTEGER` | **No** | None | **FOREIGN KEY** $\rightarrow$ `users.id` (`ON DELETE CASCADE`) |
@@ -171,6 +174,7 @@ The database comprises **6 application tables** (plus Alembic's internal `alembi
   - `fk_tasks_assigned_to_users`: `assigned_to` references `users.id` (`ON DELETE CASCADE`).
   - `fk_tasks_created_by_users`: `created_by` references `users.id` (`ON DELETE CASCADE`).
   - `fk_tasks_organization_id_organizations`: `organization_id` references `organizations.id` (`ON DELETE CASCADE`).
+  - `fk_tasks_deleted_by_users`: `deleted_by` references `users.id` (`ON DELETE SET NULL`).
 
 ---
 
@@ -261,6 +265,7 @@ erDiagram
     users ||--o{ email_verification_tokens : "receives (1:N)"
     users ||--o{ tasks : "assigned_tasks (1:N)"
     users ||--o{ tasks : "created_tasks (1:N)"
+    users ||--o{ tasks : "deleted_tasks (0:N)"
     users ||--o{ leave_requests : "submits (1:N)"
     users ||--o{ leave_requests : "reviewed_leaves (1:N)"
 
@@ -300,6 +305,9 @@ erDiagram
         string priority
         timestamp due_datetime
         timestamp completed_at
+        boolean is_deleted
+        timestamp deleted_at
+        int deleted_by FK
         int version
         int assigned_to FK
         int created_by FK
@@ -360,7 +368,7 @@ erDiagram
 
 ## 5. Migrations & Schema Drift Audit
 
-The migration chain consists of **17 linear revisions** managed via Alembic:
+The migration chain consists of **18 linear revisions** managed via Alembic:
 
 | Step | Revision ID | Down Revision | Script File | Summary of Changes |
 |:---:|---|---|---|---|
@@ -381,6 +389,7 @@ The migration chain consists of **17 linear revisions** managed via Alembic:
 | 15 | `m3n4o5p6q7r8` | `l2m3n4o5p6q7` | `m3n4o5p6q7r8_slice4a_user_ids_email_verification.py` | 10-digit random IDs, dropped `employee_code_seq`, added `email_verification_tokens`, lower(email) index |
 | 16 | `n4o5p6q7r8s9` | `m3n4o5p6q7r8` | `n4o5p6q7r8s9_slice4c_backfill_email_verification.py` | Backfilled `is_email_verified = true` for legacy accounts |
 | 17 | `o5p6q7r8s9t0` | `n4o5p6q7r8s9` | `o5p6q7r8s9t0_add_missing_indexes_for_performance.py` | Added missing query & foreign key indexes: `ix_tasks_assigned_to`, `ix_tasks_organization_id_status`, `ix_leave_requests_employee_id`, `ix_leave_requests_organization_id_status`, `ix_users_reports_to_id` |
+| 18 | `p6q7r8s9t0u1` | `o5p6q7r8s9t0` | `p6q7r8s9t0u1_add_soft_delete_to_tasks.py` | Added soft-delete columns to `tasks` (`is_deleted`, `deleted_at`, `deleted_by`) with FK to `users.id` (`ON DELETE SET NULL`) |
 
 ### Identified Migration Drift & Anomalies:
 1. **Critical File Misnaming Anomaly (`104551d9fda5`)**:
@@ -433,10 +442,11 @@ All missing foreign key and composite query indexes identified in the initial au
 - **`leave_requests.employee_id`**: Indexed via `ix_leave_requests_employee_id`. Optimizes personal leave history queries and leave overlap checks.
 - **`leave_requests(organization_id, status)`**: Indexed via composite `ix_leave_requests_organization_id_status`. Optimizes the administrative leave review queue (`/admin/leaves?status=PENDING`).
 - **`users.reports_to_id`**: Indexed via `ix_users_reports_to_id`. Optimizes hierarchy lookups, direct reports resolution, team hubs, and supervisory reporting chain updates.
+- **Index Evaluation on `is_deleted`**: Evaluated whether `ix_tasks_assigned_to` and `ix_tasks_organization_id_status` remain optimal with the `is_deleted` filter. Both indexes remain optimal without modification: `assigned_to` and `(organization_id, status)` provide high cardinality filtering, while `is_deleted` is a low-cardinality boolean where the vast majority of records are active (`false`). Adding `is_deleted` to composite indexes or creating partial indexes (`WHERE is_deleted = false`) would add index bloat and maintenance overhead without meaningful selectivity gains, and `ix_tasks_assigned_to` is also required for foreign key cascade checks. No speculative indexes were added.
 
-### 8.2 Lack of Soft Deletion on Core Entities
-- **Tasks**: `DELETE /tasks/{id}` executes hard database deletion (`db.delete(db_task)`). If an admin accidentally deletes a task, associated audit trails and history are permanently lost.
-- **Leaves**: No soft deletion.
+### 8.2 Soft Deletion on Core Entities (Tasks Resolved in `feat/soft-delete-tasks` / `p6q7r8s9t0u1`)
+- **Tasks (RESOLVED)**: `DELETE /tasks/{id}` executes soft-deletion (`is_deleted = True`, `deleted_at = datetime.now(UTC)`, `deleted_by = user.id`) in a single atomic transaction and bumps `version` to preserve optimistic locking integrity. Soft-deleted tasks are hidden by default across all active queries (lists, single fetch 404 via `get_scoped_or_404`, team views, dashboards, analytics counts and milestone trail, pagination totals `X-Total-Count`). Soft-deleted tasks cannot be modified or updated.
+- **Leaves (DEFERRED)**: Leave soft-deletion is deferred because no real leave deletion flow exists today in Teamloom; administrative approvals, rejections, and cancellations are explicit status transitions on `leave_requests`.
 
 ### 8.3 Deactivation Hierarchy Protection (Resolved in `fix/supervisor-deactivation`)
 - Previously, `deactivate_user` silently executed a bulk update nulling `reports_to_id` on all direct reports.

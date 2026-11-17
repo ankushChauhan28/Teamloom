@@ -163,7 +163,11 @@ async def get_performance_analytics(
         else_=0,
     )
 
-    base_conditions = [Task.due_datetime.is_not(None), Task.organization_id == user.organization_id]
+    base_conditions = [
+        Task.due_datetime.is_not(None),
+        Task.organization_id == user.organization_id,
+        Task.is_deleted.is_(False),
+    ]
     if filter_stmt is not None:
         base_conditions.append(filter_stmt)
 

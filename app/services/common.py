@@ -24,6 +24,8 @@ async def get_scoped_or_404(
     conditions = [model.id == id_val]
     if organization_id is not None and hasattr(model, "organization_id"):
         conditions.append(model.organization_id == organization_id)
+    if hasattr(model, "is_deleted"):
+        conditions.append(model.is_deleted.is_(False))
 
     stmt = select(model).where(*conditions)
     result = await db.execute(stmt)

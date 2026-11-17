@@ -52,7 +52,7 @@ export function TaskDeleteModal({ isOpen, onClose, onSuccess, task }) {
         {error && <Alert variant="danger">{error}</Alert>}
         <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
           Are you sure you want to delete <strong className="text-[var(--text-primary)]">"{task.title}"</strong>?
-          This action cannot be undone.
+          It will be removed from all active views.
         </p>
       </div>
     </Modal>

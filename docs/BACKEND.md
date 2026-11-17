@@ -234,6 +234,9 @@ erDiagram
 | `due_datetime` | `DateTime(timezone=True)` | Non-nullable | Exact deadline timestamp with timezone |
 | `completed_at` | `DateTime(timezone=True)` | Nullable, default=`None` | Timestamp recorded when marked `COMPLETED` |
 | `version` | `Integer` | Non-nullable, default=`1` | Optimistic concurrency locking counter incremented on every update |
+| `is_deleted` | `Boolean` | Non-nullable, default=`False`, server_default=`false` | Soft-delete flag; soft-deleted tasks are hidden across all active endpoints |
+| `deleted_at` | `DateTime(timezone=True)` | Nullable, default=`None` | Timestamp when the task was soft-deleted |
+| `deleted_by` | `Integer` | Foreign Key (`users.id`, `ondelete="SET NULL"`), Nullable | User ID of the admin who soft-deleted the task |
 | `assigned_to` | `Integer` | Foreign Key (`users.id`, `ondelete="CASCADE"`), Non-nullable | Assignee user ID |
 | `created_by` | `Integer` | Foreign Key (`users.id`, `ondelete="CASCADE"`), Non-nullable | Creator user ID |
 | `created_at` | `DateTime(timezone=True)` | Non-nullable, server_default=`func.now()` | Task creation timestamp |
@@ -313,7 +316,7 @@ erDiagram
 | `GET` | `/tasks/` | Bearer Token (Password change cleared) | `status`, `priority`, `sort_by`, `skip`, `limit` (max 100) | None | `list[TaskRead]` (200 OK, `X-Total-Count` header) | List tasks (Admin: all in org, Employee: self) |
 | `GET` | `/tasks/{id}` | Bearer Token (Admin or Assignee) | `id: int` | None | `TaskRead` (200 OK) | Fetch single task details (org-scoped 404 for cross-tenant) |
 | `PATCH` | `/tasks/{id}` | Bearer Token (Admin: all fields, Employee: status only) | `id: int` | `TaskUpdate` (requires `version: int`) | `TaskRead` (200 OK) | Update task fields / status (org-scoped 404 for cross-tenant; 409 Conflict on version mismatch) |
-| `DELETE` | `/tasks/{id}` | `check_access_level_dependency(1)` (Admin) | `id: int` | None | 204 No Content | Remove task from system (org-scoped 404 for cross-tenant) |
+| `DELETE` | `/tasks/{id}` | `check_access_level_dependency(1)` (Admin) | `id: int` | None | 204 No Content | Soft-delete task (sets `is_deleted=True`, `deleted_at`, `deleted_by`, bumps `version`; org-scoped 404 for cross-tenant / already-deleted) |
 
 ### 4.4 Leaves Router (`app/routes/leaves.py` -> `/leaves`)
 
@@ -394,6 +397,8 @@ All migrations are tracked under `alembic/versions/` and execute sequentially:
 | `l2m3n4o5p6q7` | `k1l2m3n4o5p6` | Add organizations table and backfill existing data | Creates `organizations` table, seeds default tenant "Internal / free forever" (`is_internal=True`), adds `organization_id` foreign key and indexes across `users`, `tasks`, `leave_requests`, backfills existing rows, sets `nullable=False`. |
 | `m3n4o5p6q7r8` | `l2m3n4o5p6q7` | Slice 4a: 10-digit numeric user IDs, email verification fields, email_verification_tokens table, lower(email) unique index, drop employee_code_seq | Lowercases/trims existing emails, creates unique index on `lower(email)`, regenerates 10-digit random User IDs for all existing users, adds CHECK constraint `employee_code IS NULL OR employee_code ~ '^[0-9]{10}$'`, adds `is_email_verified` & `email_verified_at` to `users`, creates `email_verification_tokens` table, drops `employee_code_seq`. |
 | `n4o5p6q7r8s9` | `m3n4o5p6q7r8` | Slice 4c: Backfill `is_email_verified` for existing users | Backfills `is_email_verified=true` and `email_verified_at=COALESCE(email_verified_at, NOW())` for all existing users to ensure legacy accounts are not blocked upon verification enforcement. |
+| `o5p6q7r8s9t0` | `n4o5p6q7r8s9` | Add missing performance indexes | Creates B-tree indexes `ix_tasks_assigned_to`, `ix_leave_requests_employee_id`, `ix_users_reports_to_id`, and composite indexes `ix_tasks_organization_id_status`, `ix_leave_requests_organization_id_status`. |
+| `p6q7r8s9t0u1` | `o5p6q7r8s9t0` | Add soft delete to tasks | Adds `is_deleted` (BOOLEAN, default false, NOT NULL), `deleted_at` (TIMESTAMPTZ, nullable), and `deleted_by` (INTEGER FK to `users.id` ON DELETE SET NULL). |
 
 ---
 
@@ -437,7 +442,8 @@ $$\text{Completion Rate} = \begin{cases}
 ### 7.4 Multi-Tenant Scoping & 404 Isolation
 - **Organization Scoping on All Queries**: Every read, write, and aggregation query on company data (`users`, `tasks`, `leave_requests`) is strictly filtered by the authenticated actor's `organization_id`.
 - **404 Anti-Enumeration Principle**: Cross-organization resource lookups by ID (e.g. `GET /tasks/{id}`, `PATCH /tasks/{id}`, `DELETE /tasks/{id}`, `PATCH /leaves/{id}`, `POST /users/{user_id}/reset-temp-password`, `PATCH /users/{user_id}/reports-to`, `PATCH /users/{user_id}/deactivate`, `PATCH /users/{user_id}/reactivate`, `GET /users/{user_id}/direct-reports`, `GET /analytics/performance?employee_id=...`, `POST /tasks/` with `assigned_to`, `POST /users/employees` with `reports_to_id`) return **HTTP 404 Not Found** (never 403) with an error detail message identical to that of a non-existent ID.
-- **Central Helper `get_scoped_or_404`**: Located in `app/services/common.py`, queries `model.id == id_val` and `model.organization_id == organization_id`. If missing or belonging to another organization, raises `ResourceNotFoundException`.
+- **Central Helper `get_scoped_or_404`**: Located in `app/services/common.py`, queries `model.id == id_val`, `model.organization_id == organization_id`, and `model.is_deleted.is_(False)` (if model has `is_deleted`). If missing, soft-deleted, or belonging to another organization, raises `ResourceNotFoundException`.
+- **Soft-Deletion Scoping Everywhere**: Soft-deleted tasks (`is_deleted=True`) are excluded across all active queries: task lists (`get_tasks`), team views (`get_team_tasks`), single fetch (`get_task_by_id` / `get_scoped_or_404`), pagination totals (`X-Total-Count`), update operations (a deleted task cannot be updated or status-changed), and analytics aggregations (`get_performance_analytics`).
 - **Pagination & Single-Query Window Optimization**:
   - All 7 list endpoints (`GET /users/`, `GET /users/me/reports`, `GET /users/{user_id}/direct-reports`, `GET /tasks/`, `GET /tasks/team`, `GET /leaves/`, `GET /leaves/team`) accept `skip` and `limit` query parameters with a hard cap of `limit <= 100`.
   - Emits the total unpaginated organization-scoped item count in the `X-Total-Count` response header.
@@ -462,6 +468,7 @@ $$\text{Completion Rate} = \begin{cases}
      ```
   4. On mismatch, the server returns **HTTP 409 Conflict** (`OptimisticLockException`), allowing the client to alert the user and reload fresh data rather than silently losing edits.
   5. On successful update, SQLAlchemy increments the version number.
+  6. **Soft Delete Version Bump**: `DELETE /tasks/{id}` performs soft deletion in an atomic transaction (`is_deleted=True`, `deleted_at=datetime.now(UTC)`, `deleted_by=user.id`), bumping the task's `version` so optimistic locking and concurrency auditing stay strictly consistent.
 
 ---
 

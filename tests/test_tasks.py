@@ -186,11 +186,20 @@ async def test_employee_update_status_and_completed_at_timestamp(
 async def test_delete_task_admin_success(
     client: AsyncClient,
     admin_headers: dict[str, str],
+    admin_user: User,
     employee_user: User,
+    db_session: AsyncSession,
 ) -> None:
     """
-    Test Admin deleting a task returns HTTP 204 No Content.
+    Test Admin deleting a task soft-deletes the row:
+    - Returns HTTP 204 No Content
+    - Subsequent GET returns HTTP 404 Not Found
+    - Row remains in database with is_deleted=True, deleted_at, deleted_by set
+    - version column increments
     """
+    from sqlalchemy import select
+    from app.models.task import Task
+
     task_res = await client.post(
         "/tasks/",
         json={
@@ -202,13 +211,23 @@ async def test_delete_task_admin_success(
         },
         headers=admin_headers,
     )
-    task_id = task_res.json()["id"]
+    task_data = task_res.json()
+    task_id = task_data["id"]
+    initial_version = task_data["version"]
 
     del_res = await client.delete(f"/tasks/{task_id}", headers=admin_headers)
     assert del_res.status_code == status.HTTP_204_NO_CONTENT
 
     get_res = await client.get(f"/tasks/{task_id}", headers=admin_headers)
     assert get_res.status_code == status.HTTP_404_NOT_FOUND
+
+    # Verify task row still exists in DB with soft-delete fields set and version bumped
+    stmt = select(Task).where(Task.id == task_id)
+    raw_task = (await db_session.execute(stmt)).scalar_one()
+    assert raw_task.is_deleted is True
+    assert raw_task.deleted_at is not None
+    assert raw_task.deleted_by == admin_user.id
+    assert raw_task.version == initial_version + 1
 
 
 @pytest.mark.asyncio
@@ -489,6 +508,227 @@ async def test_get_team_tasks_no_n_plus_one_queries(
     task_queries = [q for q in queries if "FROM tasks" in q]
     assert len(task_queries) == 1
     assert len(queries) <= 6
+
+
+@pytest.mark.asyncio
+async def test_soft_deleted_task_hidden_from_all_views_and_aggregations(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    admin_user: User,
+    employee_user: User,
+    db_session: AsyncSession,
+) -> None:
+    """
+    Verifies that a soft-deleted task is hidden everywhere by default:
+    - Task list (/tasks/) excludes it and X-Total-Count reflects active only
+    - Team view (/tasks/team) excludes it and X-Total-Count reflects active only
+    - Detail view (/tasks/{id}) returns 404
+    - Update attempts (/tasks/{id}) return 404
+    - Analytics (/analytics/performance) exclude it from counts and milestone trail
+    - DB record still exists with is_deleted=True, deleted_at, deleted_by set, version bumped
+    """
+    from app.models.task import Task
+    from sqlalchemy import select
+
+    # Setup admin -> employee reporting hierarchy for team view testing
+    employee_user.reports_to_id = admin_user.id
+    await db_session.commit()
+
+    # 1. Create two tasks
+    t1_res = await client.post(
+        "/tasks/",
+        json={
+            "title": "Active Task",
+            "description": "Should remain visible",
+            "priority": "HIGH",
+            "due_datetime": (datetime.now(UTC) + timedelta(days=3)).isoformat(),
+            "assigned_to": employee_user.id,
+        },
+        headers=admin_headers,
+    )
+    assert t1_res.status_code == status.HTTP_201_CREATED
+    t1_id = t1_res.json()["id"]
+
+    t2_res = await client.post(
+        "/tasks/",
+        json={
+            "title": "Task To Soft Delete",
+            "description": "Should become hidden everywhere",
+            "priority": "LOW",
+            "due_datetime": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
+            "assigned_to": employee_user.id,
+        },
+        headers=admin_headers,
+    )
+    assert t2_res.status_code == status.HTTP_201_CREATED
+    t2_data = t2_res.json()
+    t2_id = t2_data["id"]
+    t2_initial_version = t2_data["version"]
+
+    # Verify both tasks exist initially in list
+    list_res_initial = await client.get("/tasks/", headers=admin_headers)
+    assert list_res_initial.headers["X-Total-Count"] == "2"
+    assert len(list_res_initial.json()) == 2
+
+    # Verify both tasks count in analytics
+    analytics_initial = await client.get("/analytics/performance", headers=admin_headers)
+    assert analytics_initial.status_code == status.HTTP_200_OK
+    assert analytics_initial.json()["total_tasks"] == 2
+
+    # 2. Soft delete Task 2
+    del_res = await client.delete(f"/tasks/{t2_id}", headers=admin_headers)
+    assert del_res.status_code == status.HTTP_204_NO_CONTENT
+
+    # 3. Verify single fetch returns 404
+    detail_res = await client.get(f"/tasks/{t2_id}", headers=admin_headers)
+    assert detail_res.status_code == status.HTTP_404_NOT_FOUND
+
+    # 4. Verify update attempt returns 404
+    update_res = await client.patch(
+        f"/tasks/{t2_id}",
+        json={"version": t2_initial_version, "title": "Updated Title Attempt"},
+        headers=admin_headers,
+    )
+    assert update_res.status_code == status.HTTP_404_NOT_FOUND
+
+    # 5. Verify task list (/tasks/) excludes Task 2 and X-Total-Count is 1
+    list_res = await client.get("/tasks/", headers=admin_headers)
+    assert list_res.status_code == status.HTTP_200_OK
+    assert list_res.headers["X-Total-Count"] == "1"
+    tasks_list = list_res.json()
+    assert len(tasks_list) == 1
+    assert tasks_list[0]["id"] == t1_id
+
+    # 6. Verify team view (/tasks/team) excludes Task 2 and X-Total-Count is 1
+    team_res = await client.get("/tasks/team", headers=admin_headers)
+    assert team_res.status_code == status.HTTP_200_OK
+    assert team_res.headers["X-Total-Count"] == "1"
+    team_tasks = team_res.json()
+    assert len(team_tasks) == 1
+    assert team_tasks[0]["id"] == t1_id
+
+    # 7. Verify analytics (/analytics/performance) excludes Task 2
+    analytics_res = await client.get("/analytics/performance", headers=admin_headers)
+    assert analytics_res.status_code == status.HTTP_200_OK
+    analytics_data = analytics_res.json()
+    assert analytics_data["total_tasks"] == 1
+    trail_ids = [item["id"] for item in analytics_data["milestone_trail"]]
+    assert t1_id in trail_ids
+    assert t2_id not in trail_ids
+
+    # 8. Verify the row still exists in DB with soft delete columns and version incremented
+    raw_task = (await db_session.execute(select(Task).where(Task.id == t2_id))).scalar_one()
+    assert raw_task.is_deleted is True
+    assert raw_task.deleted_at is not None
+    assert raw_task.deleted_by == admin_user.id
+    assert raw_task.version == t2_initial_version + 1
+
+
+@pytest.mark.asyncio
+async def test_soft_delete_permissions_and_cross_org_isolation(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    employee_headers: dict[str, str],
+    employee_user: User,
+    admin_headers_b: dict[str, str],
+) -> None:
+    """
+    Verifies that:
+    - Employees cannot delete tasks (403 Forbidden)
+    - Admins from another organization cannot delete or see tasks (404 Not Found)
+    - Re-deleting an already soft-deleted task returns 404 Not Found
+    """
+    # Create task in main org
+    task_res = await client.post(
+        "/tasks/",
+        json={
+            "title": "Org Isolation Task",
+            "description": "Tenant security test",
+            "priority": "MEDIUM",
+            "due_datetime": (datetime.now(UTC) + timedelta(days=5)).isoformat(),
+            "assigned_to": employee_user.id,
+        },
+        headers=admin_headers,
+    )
+    assert task_res.status_code == status.HTTP_201_CREATED
+    task_id = task_res.json()["id"]
+
+    # 1. Non-admin (employee) attempt to delete -> 403 Forbidden
+    emp_del_res = await client.delete(f"/tasks/{task_id}", headers=employee_headers)
+    assert emp_del_res.status_code == status.HTTP_403_FORBIDDEN
+
+    # 2. Cross-org admin (Org B) cannot see task -> 404
+    other_get_res = await client.get(f"/tasks/{task_id}", headers=admin_headers_b)
+    assert other_get_res.status_code == status.HTTP_404_NOT_FOUND
+
+    # Cross-org admin (Org B) cannot delete task -> 404
+    other_del_res = await client.delete(f"/tasks/{task_id}", headers=admin_headers_b)
+    assert other_del_res.status_code == status.HTTP_404_NOT_FOUND
+
+    # 3. Main org admin successfully deletes task -> 204
+    admin_del_res = await client.delete(f"/tasks/{task_id}", headers=admin_headers)
+    assert admin_del_res.status_code == status.HTTP_204_NO_CONTENT
+
+    # 4. Attempting to delete the already soft-deleted task -> 404 Not Found
+    second_del_res = await client.delete(f"/tasks/{task_id}", headers=admin_headers)
+    assert second_del_res.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.asyncio
+async def test_deactivate_user_does_not_soft_delete_tasks(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    db_session: AsyncSession,
+) -> None:
+    """
+    Verifies that deactivating a user does NOT soft-delete or modify their assigned tasks.
+    Task rows retain is_deleted=False, deleted_at=None, deleted_by=None, and version unchanged.
+    """
+    from app.models.task import Task
+    from sqlalchemy import select
+
+    # Create new employee
+    emp_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Task Owner Employee", "email": "taskowner@testorg.com"},
+        headers=admin_headers,
+    )
+    assert emp_res.status_code == status.HTTP_201_CREATED
+    emp_id = emp_res.json()["id"]
+
+    # Assign task to this employee
+    task_res = await client.post(
+        "/tasks/",
+        json={
+            "title": "Persistent Task",
+            "description": "Must not be deleted when user deactivates",
+            "priority": "HIGH",
+            "due_datetime": (datetime.now(UTC) + timedelta(days=10)).isoformat(),
+            "assigned_to": emp_id,
+        },
+        headers=admin_headers,
+    )
+    assert task_res.status_code == status.HTTP_201_CREATED
+    task_data = task_res.json()
+    task_id = task_data["id"]
+    version_before = task_data["version"]
+
+    # Deactivate the employee
+    deact_res = await client.patch(f"/users/{emp_id}/deactivate", headers=admin_headers)
+    assert deact_res.status_code == status.HTTP_200_OK
+
+    # Check task row directly in database
+    db_task = (await db_session.execute(select(Task).where(Task.id == task_id))).scalar_one()
+    assert db_task.is_deleted is False
+    assert db_task.deleted_at is None
+    assert db_task.deleted_by is None
+    assert db_task.version == version_before
+
+    # Verify task is still reachable via API
+    get_task_res = await client.get(f"/tasks/{task_id}", headers=admin_headers)
+    assert get_task_res.status_code == status.HTTP_200_OK
+    assert get_task_res.json()["id"] == task_id
+
 
 
 
