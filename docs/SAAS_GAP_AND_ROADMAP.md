@@ -9,11 +9,12 @@
 ### 7.1 Existing Tests & Test Suite Health
 
 #### Test Inventory:
-The automated test suite resides in `/tests` and comprises **19 test files** collecting **205 test cases**:
+The automated test suite resides in `/tests` and comprises **21 test files** collecting **308 test cases** (with full 3-role matrix and anti-enumeration coverage in `test_tenant_isolation.py`):
 
 | Test File | Test Type | Focus Area |
 |---|---|---|
 | `tests/conftest.py` | Fixtures & DB Harness | PostgreSQL Docker setup, Alembic migrations runner, table truncation isolation |
+| `tests/fixtures_tenant_isolation.py` | Fixtures / Isolation | Dedicated two-tenant (Org A & Org B) full hierarchy fixture harness |
 | `tests/test_analytics.py` | Integration / API | Scoped performance calculations (`self`, `team`, `org`, `employee`) |
 | `tests/test_auth.py` | Integration / API | Login modes, password changes, token refresh rotation, dual-token logout |
 | `tests/test_concurrency.py` | Concurrency Stress | Optimistic locking conflict detection (HTTP 409), 10-digit code collisions |
@@ -31,6 +32,7 @@ The automated test suite resides in `/tests` and comprises **19 test files** col
 | `tests/test_slice4c_migration.py` | Migration Test | Migration test for email verification backfill |
 | `tests/test_slice4c_signup_verification.py`| Integration / Auth | Self-serve signup, token generation, email verification endpoint tests |
 | `tests/test_tasks.py` | Integration / API | Task CRUD, versioning, completed_at, and sorting tests |
+| `tests/test_tenant_isolation.py` | Acceptance / Isolation| Comprehensive API-level tenant isolation test suite (Slice 5, Depth A) |
 | `tests/test_users.py` | Integration / API | User profile, reports-to hierarchy updates, and deactivation tests |
 
 #### Execution Command:
@@ -193,7 +195,7 @@ flowchart TD
 
     subgraph Phase 2: High Priority (SaaS Completion)
         H1["Slice 4e: Employee Invite Flow (Set-Password Token)"]
-        H2["Slice 5: Isolation Test Suite Verification"]
+        H2["Slice 5: Isolation Test Suite Verification (Resolved)"]
         H3["Slice 6 & 7: Subscription Model & Razorpay Integration"]
         H4["Add Missing DB Indexes (assigned_to, status)"]
     end
@@ -229,8 +231,7 @@ flowchart TD
 - **H1: Implement Slice 4e (Employee Invite Flow)**:
   - Replace admin-generated temporary passwords with secure, expiring set-password invite links (`POST /users/employees/invite`).
   - Add invite status indicators (`Pending`, `Accepted`, `Expired`) and Resend/Revoke actions in `AdminEmployeesPage.jsx`.
-- **H2: Finalize Slice 5 (Acceptance Scenarios Isolation Test Suite)**:
-  - Run and verify all scenarios in section 5.A of `TEAMLOOM_SAAS_REQUIREMENTS.md`.
+- **H2: Finalize Slice 5 (Acceptance Scenarios Isolation Test Suite)**: **Completed (Resolved)**. Implemented in branch `test/tenant-isolation-suite` with 21 new black-box HTTP tests across all application routes in `tests/test_tenant_isolation.py` and a dedicated, extensible fixture harness in `tests/fixtures_tenant_isolation.py`. Verifies cross-tenant 404 anti-enumeration, strict list and pagination scoping, rejected cross-org write/foreign-key attacks, soft-delete cross-org invisibility, and query/body tenant parameter override neutralization.
 - **H3: Implement Slices 6 & 7 (Billing & Razorpay Integration)**:
   - Introduce `subscriptions` and `invoices` database models.
   - Integrate Razorpay checkout, plan tier gating (`Starter`, `Growth`, `Business`), and webhook signature verification (`razorpay_signature` + idempotency key storage).
