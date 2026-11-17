@@ -9,7 +9,7 @@
 ### 7.1 Existing Tests & Test Suite Health
 
 #### Test Inventory:
-The automated test suite resides in `/tests` and comprises **21 test files** collecting **235 test cases**:
+The automated test suite resides in `/tests` and comprises **21 test files** collecting **308 test cases** (with full 3-role matrix and anti-enumeration coverage in `test_tenant_isolation.py`):
 
 | Test File | Test Type | Focus Area |
 |---|---|---|

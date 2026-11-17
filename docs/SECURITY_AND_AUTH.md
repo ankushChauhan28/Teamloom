@@ -228,7 +228,21 @@ The isolation test suite utilizes `TenantIsolationSetup`, an isolated two-tenant
 - Each tenant contains active tasks, soft-deleted tasks (`is_deleted = True`), and pending leave requests.
 - Precomputed JWT Bearer headers for all 6 users, with shared password hashing to ensure deterministic, fast test runs.
 
-### 5.3 How to Extend the Isolation Suite
+### 5.3 Role Matrix & Cross-Org Attack Parametrization
+Every cross-tenant attack (by-id access, collection listing, foreign-key injection, and write attacks) is systematically parametrized across all three caller roles:
+- **Org A Admin (Tier 1)**
+- **Org A Supervisor (Tier 2)**
+- **Org A Employee (Tier 3)**
+
+For endpoints requiring elevated privileges (such as employee creation, user deactivation/reactivation, manager reassignment, leave reviews, and task deletion), roles lacking authority return their standard HTTP 403 Forbidden response identically for both cross-tenant resource IDs and non-existent IDs (`NONEXISTENT_ID = 9999999`). Where roles have permission (e.g., GET/PATCH tasks), cross-tenant IDs and non-existent IDs return HTTP 404 Not Found identically. This guarantees **zero existence leakage** across all roles and resources.
+
+### 5.4 Password Reset & Account Recovery Anti-Enumeration
+The application enforces strict anti-enumeration across authentication recovery channels:
+1. **Public Verification Resend (`POST /auth/resend-verification`)**: Responds with HTTP 200 and an identical generic message (`"If an unverified account exists for this email, a verification link has been sent."`) regardless of whether the email belongs to Org A, Org B, or does not exist at all.
+2. **Password Reset Endpoints (`POST /auth/request-password-reset`, `POST /auth/reset-password`)**: Because self-serve password reset is not exposed in the API (deferred to operator tooling), requests to these endpoints return HTTP 404 Not Found uniformly, preventing cross-tenant account enumeration or state alteration.
+3. **Password Change (`POST /auth/change-password`)**: Authenticated endpoint bound strictly to `current_user.id`; changing an Org A user's password leaves Org B user hashes completely intact.
+
+### 5.5 How to Extend the Isolation Suite
 When new endpoints are added (e.g., Slice 4e Employee Invites or Slice 6 Billing):
 1. **Import the fixture**: Import `isolation_setup` and `TenantIsolationSetup` from `tests.fixtures_tenant_isolation`.
 2. **Add cross-org tests**:

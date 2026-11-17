@@ -39,7 +39,7 @@
   * **Slice 5 (Stabilization Batch)**: Complete API-level tenant isolation test suite (`tests/test_tenant_isolation.py`, `tests/fixtures_tenant_isolation.py`), proving zero cross-tenant leakage across all routes.
 * **Pending Slices**: Rate limiting (decided Level 1 plan), Slice 4e (employee invite flow), Slices 6–10 (Razorpay billing, lifecycle, invoices, operator CLI), and Slice 11 (go-live checklist).
 * **Alembic Head Revision**: `p6q7r8s9t0u1` (`add_soft_delete_to_tasks`).
-* **Test Suite Health**: **235 collected tests** via `pytest --collect-only -q` (100% passing in CI).
+* **Test Suite Health**: **308 collected tests** via `pytest --collect-only -q` (100% passing in CI).
 
 ---
 
