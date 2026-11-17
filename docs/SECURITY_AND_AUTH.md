@@ -197,3 +197,42 @@ Authority is governed by integer `access_level` on `users` (`app/core/permission
 - Avatar icons are rendered as colored SVG initials; attachments are not supported.
 - Consequently, there are currently no risks regarding malicious file uploads, unvalidated MIME types, or directory traversal via filenames.
 
+---
+
+## 5. Multi-Tenant Isolation & Attack Surface Verification Suite (Slice 5, Depth A)
+
+### 5.1 Architecture & Objectives
+Teamloom implements strict multi-tenancy at the application and database layers. To provide mathematical certainty that an authenticated user of Organization A cannot read, modify, delete, or discover data belonging to Organization B, an API-level tenant isolation test suite is implemented in `tests/test_tenant_isolation.py` backed by dedicated fixtures in `tests/fixtures_tenant_isolation.py`.
+
+The suite executes **pure black-box HTTP tests** through FastAPI's `AsyncClient`, validating external security contracts without internal mocking:
+1. **By-ID Access & Anti-Enumeration**: Target resource IDs belonging to Org B across all single-resource endpoints (`GET /tasks/{id}`, `PATCH /tasks/{id}`, `DELETE /tasks/{id}`, `PATCH /leaves/{id}`, `GET /users/{id}/direct-reports`, `POST /users/{id}/reset-temp-password`, `PATCH /users/{id}/reports-to`, `PATCH /users/{id}/deactivate`, `PATCH /users/{id}/reactivate`). Every request returns HTTP 404 with identical error messages to non-existent IDs, preventing cross-tenant existence enumeration.
+2. **List Endpoints & Pagination Scoping**: Endpoints returning collections (`/tasks/`, `/tasks/team`, `/leaves/`, `/leaves/team`, `/users/`, `/users/me/reports`) and their `X-Total-Count` headers strictly count and return only Org A entities, completely excluding Org B rows even when Org B has a larger volume of records.
+3. **Cross-Tenant Write & Foreign-Key Injection Attacks**:
+   - Assigning a task to an Org B user returns HTTP 404 (`Assigned user with ID ... not found.`).
+   - Provisioning an employee with `reports_to_id` set to an Org B supervisor returns HTTP 404 (`Reports-to supervisor user not found.`).
+   - Reassigning an employee's supervisor to an Org B supervisor via `PATCH /users/{id}/reports-to` returns HTTP 404.
+   - Deactivating a supervisor with `default_new_manager_id` or `reassignments` mapped to an Org B manager returns HTTP 404.
+   - Reviewing or modifying an Org B leave request returns HTTP 404.
+4. **Soft-Deleted Invisibility**: Soft-deleted tasks of Org B are completely inaccessible to Org A across fetch (404), list (omitted), update (404), and delete (404).
+5. **Analytics & Aggregation Scoping**: `/analytics/performance` across `org`, `team`, and `self` scopes strictly aggregates Org A tasks. Cross-org lookups via `?employee_id={org_b_user_id}` return HTTP 404/403.
+6. **Query Parameter & Request Body Spoofing**: Injecting `?organization_id={org_b.id}` or request body `{"organization_id": org_b.id}` is completely overridden by the authenticated user's session context (`current_user.organization_id`).
+7. **Database State Verification**: After every attempted write attack, direct database queries confirm that Org B records remain unchanged.
+
+### 5.2 Test Fixture Harness (`tests/fixtures_tenant_isolation.py`)
+The isolation test suite utilizes `TenantIsolationSetup`, an isolated two-tenant harness provisioning:
+- **Org Alpha (Org A)** & **Org Bravo (Org B)**.
+- Each tenant contains a full 3-tier hierarchy:
+  - Tier 1: Organization Admin (`access_level = 1`, `role = ADMIN`)
+  - Tier 2: Supervisor (`access_level = 2`, `role = EMPLOYEE`, reporting to Admin)
+  - Tier 3: Direct Report Employee (`access_level = 3`, `role = EMPLOYEE`, reporting to Supervisor)
+- Each tenant contains active tasks, soft-deleted tasks (`is_deleted = True`), and pending leave requests.
+- Precomputed JWT Bearer headers for all 6 users, with shared password hashing to ensure deterministic, fast test runs.
+
+### 5.3 How to Extend the Isolation Suite
+When new endpoints are added (e.g., Slice 4e Employee Invites or Slice 6 Billing):
+1. **Import the fixture**: Import `isolation_setup` and `TenantIsolationSetup` from `tests.fixtures_tenant_isolation`.
+2. **Add cross-org tests**:
+   - By-ID attack: Call the new endpoint targeting Org B resource ID from Org A caller -> assert HTTP 404.
+   - Write/FK attack: Pass Org B ID inside request body or query parameter -> assert HTTP 404 or override.
+   - Verification: Query `db_session` to verify Org B records are unmodified.
+

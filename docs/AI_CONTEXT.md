@@ -36,29 +36,33 @@
   * **Slice 4b**: Dual-mode login (`ADMIN` via email, `EMPLOYEE` via User ID) enforced on server.
   * **Slice 4c**: Self-serve signup (`pending_payment`) and background email verification.
   * **Slice 4d**: Frontend auth UI (mode toggle, signup form, verification page, unverified notice).
-* **Pending Slices**: Stabilization batch (Slice 5 isolation tests), Slice 4e (employee invite flow), Slices 6–10 (Razorpay billing, lifecycle, invoices, operator CLI), and Slice 11 (go-live checklist).
+  * **Slice 5 (Stabilization Batch)**: Complete API-level tenant isolation test suite (`tests/test_tenant_isolation.py`, `tests/fixtures_tenant_isolation.py`), proving zero cross-tenant leakage across all routes.
+* **Pending Slices**: Rate limiting (decided Level 1 plan), Slice 4e (employee invite flow), Slices 6–10 (Razorpay billing, lifecycle, invoices, operator CLI), and Slice 11 (go-live checklist).
 * **Alembic Head Revision**: `p6q7r8s9t0u1` (`add_soft_delete_to_tasks`).
-* **Test Suite Health**: **214 collected tests** via `pytest --collect-only -q` (100% passing in CI).
+* **Test Suite Health**: **235 collected tests** via `pytest --collect-only -q` (100% passing in CI).
 
 ---
 
 ## 4. Locked Architectural Decisions & Delivery Order
 1. **Target Execution Order (Owner's Plan)**:
-   * **Phase 1: Stabilization Batch**:
+   * **Phase 1: Stabilization Batch (All 4 Items Completed)**:
      1. `fix/db-indexes` (add missing foreign key and search indexes — Completed).
      2. `fix/supervisor-deactivation` (require subordinate reassignment before deactivation; return HTTP 409 with affected list — Completed).
      3. `feat/soft-delete-tasks` (soft-delete columns and scoped filters for tasks — Completed; task restore and leave soft delete deferred as later items).
-     4. `test/tenant-isolation-suite` (Slice 5 multi-tenant isolation tests for existing routes).
-   * **Phase 2: Slice 4e (Employee Invite Flow)**:
-     * One-time set-password invite link (hashed, single-use, 24h expiring token), admin Resend/Revoke in roster, no temp passwords. Updates isolation suite to cover invite endpoints. Ships before Slice 6 so seat caps apply to invites cleanly.
+     4. `test/tenant-isolation-suite` (Slice 5 multi-tenant isolation tests for all existing routes — Completed).
+   * **Phase 2: Rate Limiting & Slice 4e (Employee Invite Flow)**:
+     * Rate limiting is the next pending item with the decided Level 1 plan: sliding window, compound `{IP, identifier}` key, loose per-IP ceiling, Redis later behind an interface.
+     * Slice 4e: One-time set-password invite link (hashed, single-use, 24h expiring token), admin Resend/Revoke in roster, no temp passwords. Updates isolation suite to cover invite endpoints. Ships before Slice 6 so seat caps apply to invites cleanly.
    * **Phase 3: Slice 6 (Plans & Billing)**:
      * Plan subscription model, `pending_payment` access gating, race-safe seat limit enforcement.
    *(Note: `docs/TEAMLOOM_SAAS_REQUIREMENTS.md` originally suggested Slice 4e -> Slice 5 -> Slice 6; the owner's plan prioritizes codebase stabilization and lands the Slice 5 isolation test suite first, followed by Slice 4e and Slice 6).*
 2. **Supervisor Deactivation Safety**: Deactivating a supervisor must **not** silently set direct reports' `reports_to_id = NULL`. The API must require the admin to reassign subordinates first, returning HTTP 409 Conflict with the subordinate list if reassignment is needed.
 3. **Soft-Delete for Tasks & Leaves**: Soft-delete is implemented for tasks (`is_deleted`, `deleted_at`, `deleted_by`, version bump; stabilization item 3 done for tasks). Task restore and leave soft delete are deferred as later items (since no real leave delete flow exists today; approve, reject, and cancel are status changes). An independent `audit_logs` table is deferred to a later SaaS slice.
-4. **Rate Limiting**: **Open decision / Under discussion**.
-   * *Current state*: In-memory sliding-window limiter (`InMemoryRateLimiter`) keyed strictly by client IP (`10 requests / 15 min` on `/auth/login`, `/auth/signup`, `/auth/resend-verification`).
-   * *Open questions*: Whether to introduce a compound key `{IP, identifier}` for login/signup/resend (to prevent a single corporate NAT IP from locking out an entire organization), whether to add a loose per-IP ceiling against distributed password spraying, and whether to migrate algorithmically from sliding window to token bucket. Redis is a later operational step for multi-worker horizontal scaling, not decided now.
+4. **Rate Limiting**: **Decided Level 1 Plan (Pending Implementation)**.
+   * *Architecture*: Sliding window rate limiting.
+   * *Keying*: Compound `{IP, identifier}` key for auth endpoints (`/auth/login`, `/auth/signup`, `/auth/resend-verification`) to prevent corporate NAT IP collisions.
+   * *Abuse Defense*: Loose per-IP ceiling against distributed password spraying.
+   * *Persistence*: In-memory initially with a clean interface for Redis multi-worker horizontal scaling later.
 
 ---
 
