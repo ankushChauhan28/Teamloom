@@ -151,9 +151,8 @@ The following audit matrix evaluates Teamloom's current codebase against the ind
    - **Evidence**: Line 52 calls `POST /auth/register`, which was deleted when self-serve signup moved to `/auth/signup`. Running this script fails with HTTP 404/405.
 3. **Supervisor Deactivation Irreversibly Unlinks Direct Reports (RESOLVED on `fix/supervisor-deactivation`)**
    - **Resolution**: Removed silent bulk-nulling update. Deactivating a supervisor with active direct reports now accepts `UserDeactivateRequest` with explicit subordinate mappings or default manager (or explicit null). If unresolved active direct reports remain, the endpoint returns HTTP 409 Conflict with the unresolved list, preserving hierarchy integrity in a single atomic transaction.
-4. **Hard Delete on Tasks Destroys History**
-   - **File**: `app/services/task_service.py:289`
-   - **Evidence**: `await db.delete(db_task)`. Tasks lack an `is_deleted` soft-delete column. Accidental deletion is irrecoverable.
+4. **Hard Delete on Tasks Destroys History (RESOLVED on `feat/soft-delete-tasks` via `p6q7r8s9t0u1`)**
+   - **Resolution**: Tasks now use soft deletion via `is_deleted` (BOOLEAN, default false, not null), `deleted_at` (TIMESTAMPTZ), and `deleted_by` (FK to `users.id` ON DELETE SET NULL). `DELETE /tasks/{id}` sets soft-delete columns in a single transaction and bumps `version`. Soft-deleted tasks are hidden across all active queries (lists, team view, detail 404, analytics counts and milestone trail, pagination totals). Leave soft delete is deferred because no real leave delete flow exists today; approve, reject, and cancel are status changes.
 5. **APScheduler Duplicate Execution in Clustered Environments**
    - **File**: `app/core/scheduler.py`
    - **Evidence**: APScheduler runs in-process inside FastAPI's `lifespan`. If Uvicorn is launched with multiple worker processes (`--workers 4`) or scaled across multiple container replicas, each process will run its own independent cleanup job, causing duplicate database execution.
@@ -240,7 +239,7 @@ flowchart TD
   - Add indexes on `tasks.assigned_to`, `leave_requests.employee_id`, and composite `tasks(organization_id, status)`.
 
 #### 3. Medium Priority (Operational Stability & Usability)
-- **M1: Task & Leave Soft Delete**: Add `is_deleted = Column(Boolean, default=False)` to preserve audit trails.
+- **M1: Task Soft Delete (Resolved) & Leave Soft Delete (Deferred)**: Task soft delete implemented in `feat/soft-delete-tasks` (`is_deleted`, `deleted_at`, `deleted_by`, version bump). Leave soft delete is deferred because no real leave delete flow exists today; approve, reject, and cancel are status changes.
 - **M2: Relax IP Rate Limiting for Corporate Networks**: Key rate limiting by compound `{IP, identifier}` to prevent corporate NAT blocking.
 - **M3: Prevent Supervisor Orphan Reassignments**: Store original reporting hierarchy in an audit table or preserve `previous_reports_to_id` so reactivating a supervisor automatically reconnects their team.
 - **M4: Distributed Scheduler**: Move APScheduler or recurring jobs to an external worker queue (Celery/ARQ with Redis) to prevent duplicate runs across horizontal replicas.

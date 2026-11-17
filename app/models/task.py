@@ -1,6 +1,6 @@
 import enum
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -30,6 +30,11 @@ class Task(Base):
     priority = Column(SQLEnum(TaskPriority), nullable=False)
     due_datetime = Column(DateTime(timezone=True), nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+    is_deleted = Column(Boolean, default=False, server_default=text("false"), nullable=False)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
+    deleted_by = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     version: Mapped[int] = mapped_column(default=1)
     __mapper_args__ = {"version_id_col": version}
     __table_args__ = (Index("ix_tasks_organization_id_status", "organization_id", "status"),)
@@ -54,4 +59,5 @@ class Task(Base):
         "User", foreign_keys=[assigned_to], viewonly=True
     )
     creator = relationship("User", foreign_keys=[created_by], back_populates="created_tasks")
+    deleted_by_user = relationship("User", foreign_keys=[deleted_by])
 

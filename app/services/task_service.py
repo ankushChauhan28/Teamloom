@@ -96,6 +96,7 @@ async def get_team_tasks(
     conditions = [
         Task.organization_id == user.organization_id,
         Task.assigned_to.in_(report_ids),
+        Task.is_deleted.is_(False),
     ]
 
     if status:
@@ -156,7 +157,10 @@ async def get_tasks(
     Supports filtering, sorting, and deterministic pagination.
     """
     capped_limit = min(max(1, limit), 100)
-    conditions = [Task.organization_id == user.organization_id]
+    conditions = [
+        Task.organization_id == user.organization_id,
+        Task.is_deleted.is_(False),
+    ]
 
     # Tier / Role check: Tier 1 sees all in org, others see only their own assigned tasks
     is_admin = getattr(user, "access_level", None) == 1 or user.role == UserRole.ADMIN
@@ -289,7 +293,9 @@ async def update_task(
 
 async def delete_task(db: AsyncSession, task_id: int, user: User) -> None:
     """
-    Deletes a task scoped to the user's organization. Tier 1 only.
+    Soft-deletes a task scoped to the user's organization. Tier 1 only.
+    Sets is_deleted=True, deleted_at=now, and deleted_by=user.id in a single
+    transaction, bumping the version column for optimistic locking consistency.
     """
     is_admin = getattr(user, "access_level", None) == 1 or user.role == UserRole.ADMIN
     if not is_admin:
@@ -303,5 +309,15 @@ async def delete_task(db: AsyncSession, task_id: int, user: User) -> None:
         error_msg=f"Task with ID {task_id} not found.",
     )
 
-    await db.delete(db_task)
-    await db.commit()
+    db_task.is_deleted = True
+    db_task.deleted_at = datetime.now(UTC)
+    db_task.deleted_by = user.id
+
+    try:
+        await db.commit()
+    except StaleDataError:
+        await db.rollback()
+        raise AppException(
+            status_code=409,
+            detail="Task was modified concurrently. Please refresh and retry.",
+        )
