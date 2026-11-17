@@ -132,7 +132,7 @@ The following audit matrix evaluates Teamloom's current codebase against the ind
 | **Monitoring & Error Tracking**| Real-time exception capture, APM, telemetry | **Missing** | No Sentry, OpenTelemetry, Prometheus, or Datadog integration. Unhandled exceptions output to server stdout only. |
 | **Email Notifications** | Transactional emails with domain authentication | **Partial** | Swappable `EmailSender` interface with SMTP and Console implementations. Dispatches welcome emails and verification links. **Gaps**: No production transactional provider (SendGrid/SES) or SPF/DKIM verification. |
 | **API Versioning & Docs** | Semantic versioning in routes, OpenAPI documentation | **Partial** | Swagger (`/docs`) and ReDoc (`/redoc`) are available. **Gaps**: Routes lack version prefixes (e.g. `/api/v1/tasks`); breaking changes will impact clients. |
-| **Rate Limiting** | DDoS protection, brute-force mitigation | **Partial** | 10 req / 15 min sliding window on login, signup, resend. **Gaps**: In-memory by default; rate limits apply to entire IP (problematic for corporate NAT IPs); general API routes have no rate limits. |
+| **Rate Limiting** | DDoS protection, brute-force mitigation | **Present** | Level 1 sliding window with compound key `{IP, identifier}` (10/15m) preventing corporate NAT lockout, plus looser per-IP ceiling (100/15m) against spraying. Abstract `RateLimiter` interface with `InMemoryRateLimiter` and stale-key cleanup; `RedisRateLimiter` planned for horizontal multi-worker scaling. |
 | **Security Hardening** | CSRF, XSS, headers, secret management, lockout | **Present** | Constant-time dummy bcrypt verification, account lockout, dual-token revocation blacklist, memory-stored access tokens, `SameSite=Lax` cookies, parameterized SQL queries. |
 | **Legal & Compliance Pages** | Terms of Service, Privacy Policy, refund policy | **Missing** | No legal pages, cookie consent banners, or GDPR/data privacy disclaimers exist in the frontend. |
 | **Onboarding Experience** | Guided setup, product tour, invite workflows | **Partial** | Signup and email verification pages exist. **Gaps**: No first-time company onboarding wizard; employee onboarding uses temporary passwords rather than secure invite links (Slice 4e pending). |
@@ -158,9 +158,8 @@ The following audit matrix evaluates Teamloom's current codebase against the ind
 5. **APScheduler Duplicate Execution in Clustered Environments**
    - **File**: `app/core/scheduler.py`
    - **Evidence**: APScheduler runs in-process inside FastAPI's `lifespan`. If Uvicorn is launched with multiple worker processes (`--workers 4`) or scaled across multiple container replicas, each process will run its own independent cleanup job, causing duplicate database execution.
-6. **Rate Limiting NAT Bottleneck for Corporate Offices**
-   - **File**: `app/routes/auth.py:183`
-   - **Evidence**: IP-based rate limiting caps login attempts at 10 requests per 15 minutes per IP. For organizations where all employees share a single corporate NAT IP, 10 total login attempts across the entire company in 15 minutes will cause widespread false-positive lockouts.
+6. **Rate Limiting NAT Bottleneck for Corporate Offices (RESOLVED on `fix/rate-limiting`)**
+   - **Resolution**: Upgraded auth endpoints (`/auth/login`, `/auth/swagger-login`, `/auth/signup`, `/auth/resend-verification`) to Level 1 dual-key sliding-window rate limiting behind an abstract `RateLimiter` interface. Requests must pass both compound `{client IP, normalized identifier}` (default 10 attempts / 15m) and a looser per-IP ceiling (default 100 attempts / 15m). This eliminates office NAT lockouts while preserving spray defense. Identical 429 error bodies prevent account enumeration, and memory is guarded by automatic stale-key cleanup. Multi-worker scaling is architected behind the swappable `RateLimiter` interface for future Redis deployment.
 
 ---
 
@@ -241,7 +240,7 @@ flowchart TD
 
 #### 3. Medium Priority (Operational Stability & Usability)
 - **M1: Task Soft Delete (Resolved) & Leave Soft Delete (Deferred)**: Task soft delete implemented in `feat/soft-delete-tasks` (`is_deleted`, `deleted_at`, `deleted_by`, version bump). Leave soft delete is deferred because no real leave delete flow exists today; approve, reject, and cancel are status changes.
-- **M2: Relax IP Rate Limiting for Corporate Networks**: Key rate limiting by compound `{IP, identifier}` to prevent corporate NAT blocking.
+- **M2: Relax IP Rate Limiting for Corporate Networks**: **Completed (Resolved on `fix/rate-limiting`)**. Keyed rate limiting by compound `{IP, identifier}` to prevent corporate NAT blocking, backed by looser IP ceiling against spraying and swappable interface.
 - **M3: Prevent Supervisor Orphan Reassignments**: Store original reporting hierarchy in an audit table or preserve `previous_reports_to_id` so reactivating a supervisor automatically reconnects their team.
 - **M4: Distributed Scheduler**: Move APScheduler or recurring jobs to an external worker queue (Celery/ARQ with Redis) to prevent duplicate runs across horizontal replicas.
 - **M5: Frontend Server-Side Pagination**: Add page numbers and item-per-page selectors to `AdminTasksPage.jsx` and `AdminLeavesPage.jsx`.

@@ -36,10 +36,11 @@
   * **Slice 4b**: Dual-mode login (`ADMIN` via email, `EMPLOYEE` via User ID) enforced on server.
   * **Slice 4c**: Self-serve signup (`pending_payment`) and background email verification.
   * **Slice 4d**: Frontend auth UI (mode toggle, signup form, verification page, unverified notice).
-  * **Slice 5 (Stabilization Batch)**: Complete API-level tenant isolation test suite (`tests/test_tenant_isolation.py`, `tests/fixtures_tenant_isolation.py`), proving zero cross-tenant leakage across all routes.
-* **Pending Slices**: Rate limiting (decided Level 1 plan), Slice 4e (employee invite flow), Slices 6–10 (Razorpay billing, lifecycle, invoices, operator CLI), and Slice 11 (go-live checklist).
+  * **Slice 5 (Stabilization Batch Completed)**: Complete API-level tenant isolation test suite (`tests/test_tenant_isolation.py`, `tests/fixtures_tenant_isolation.py`), proving zero cross-tenant leakage across all routes.
+  * **Rate Limiting (Level 1 Completed)**: Abstract `RateLimiter` interface, `InMemoryRateLimiter` sliding-window implementation, dual-key auth protection (compound `{client IP, normalized identifier}` 10/15m + per-IP ceiling 100/15m), stale-key cleanup, trusted proxy support, and anti-enumeration.
+* **Pending Slices**: Frontend CI check integration, Slice 4e (employee invite flow), Slice 6 (plans & billing), Slices 7–10 (Razorpay billing, lifecycle, invoices, operator CLI), and Slice 11 (go-live checklist).
 * **Alembic Head Revision**: `p6q7r8s9t0u1` (`add_soft_delete_to_tasks`).
-* **Test Suite Health**: **308 collected tests** via `pytest --collect-only -q` (100% passing in CI).
+* **Test Suite Health**: **316 collected tests** via `pytest --collect-only -q` (100% passing in CI).
 
 ---
 
@@ -50,19 +51,21 @@
      2. `fix/supervisor-deactivation` (require subordinate reassignment before deactivation; return HTTP 409 with affected list — Completed).
      3. `feat/soft-delete-tasks` (soft-delete columns and scoped filters for tasks — Completed; task restore and leave soft delete deferred as later items).
      4. `test/tenant-isolation-suite` (Slice 5 multi-tenant isolation tests for all existing routes — Completed).
-   * **Phase 2: Rate Limiting & Slice 4e (Employee Invite Flow)**:
-     * Rate limiting is the next pending item with the decided Level 1 plan: sliding window, compound `{IP, identifier}` key, loose per-IP ceiling, Redis later behind an interface.
-     * Slice 4e: One-time set-password invite link (hashed, single-use, 24h expiring token), admin Resend/Revoke in roster, no temp passwords. Updates isolation suite to cover invite endpoints. Ships before Slice 6 so seat caps apply to invites cleanly.
-   * **Phase 3: Slice 6 (Plans & Billing)**:
-     * Plan subscription model, `pending_payment` access gating, race-safe seat limit enforcement.
-   *(Note: `docs/TEAMLOOM_SAAS_REQUIREMENTS.md` originally suggested Slice 4e -> Slice 5 -> Slice 6; the owner's plan prioritizes codebase stabilization and lands the Slice 5 isolation test suite first, followed by Slice 4e and Slice 6).*
+   * **Phase 2: Rate Limiting & Next Planned Work**:
+     * **Rate Limiting (Level 1 Completed on `fix/rate-limiting`)**: Dual-key sliding window (`{client IP, identifier}` 10/15m + IP ceiling 100/15m) behind swappable `RateLimiter` interface with stale-key cleanup and trusted-proxy defense.
+     * **Next Planned Work**:
+       1. Frontend CI check: Add `npm run lint` and `npm run build` to GitHub Actions workflow.
+       2. Slice 4e (Employee Invite Flow): One-time set-password invite link (hashed, single-use, 24h expiring token), admin Resend/Revoke in roster, no temp passwords. Updates isolation suite to cover invite endpoints. Ships before Slice 6 so seat caps apply to invites cleanly.
+       3. Slice 6 (Plans & Billing): Plan subscription model, `pending_payment` access gating, race-safe seat limit enforcement.
+   *(Note: `docs/TEAMLOOM_SAAS_REQUIREMENTS.md` originally suggested Slice 4e -> Slice 5 -> Slice 6; the owner's plan prioritizes codebase stabilization and lands the Slice 5 isolation test suite first, followed by rate limiting stabilization, Slice 4e, and Slice 6).*
 2. **Supervisor Deactivation Safety**: Deactivating a supervisor must **not** silently set direct reports' `reports_to_id = NULL`. The API must require the admin to reassign subordinates first, returning HTTP 409 Conflict with the subordinate list if reassignment is needed.
 3. **Soft-Delete for Tasks & Leaves**: Soft-delete is implemented for tasks (`is_deleted`, `deleted_at`, `deleted_by`, version bump; stabilization item 3 done for tasks). Task restore and leave soft delete are deferred as later items (since no real leave delete flow exists today; approve, reject, and cancel are status changes). An independent `audit_logs` table is deferred to a later SaaS slice.
-4. **Rate Limiting**: **Decided Level 1 Plan (Pending Implementation)**.
-   * *Architecture*: Sliding window rate limiting.
-   * *Keying*: Compound `{IP, identifier}` key for auth endpoints (`/auth/login`, `/auth/signup`, `/auth/resend-verification`) to prevent corporate NAT IP collisions.
-   * *Abuse Defense*: Loose per-IP ceiling against distributed password spraying.
-   * *Persistence*: In-memory initially with a clean interface for Redis multi-worker horizontal scaling later.
+4. **Rate Limiting**: **Level 1 Implemented & Resolved (on `fix/rate-limiting`)**.
+   * *Architecture*: Sliding window rate limiting behind abstract `RateLimiter` interface (`check_and_increment`, `check_auth_rate_limit`, `cleanup`, `reset`).
+   * *Keying*: Dual-key check on auth endpoints (`/auth/login`, `/auth/swagger-login`, `/auth/signup`, `/auth/resend-verification`) requiring requests to pass compound `{client IP, normalized identifier}` (default 10 attempts / 15m) to prevent corporate NAT lockout, and a looser per-IP ceiling (default 100 attempts / 15m) to prevent password spraying.
+   * *Anti-Enumeration*: Generic identical 429 response body and `Retry-After` header regardless of account existence; timing attack defense (dummy bcrypt comparison) intact.
+   * *Proxy Handling*: Direct socket connection host used by default; `X-Forwarded-For` parsed only if direct client host is in `settings.TRUSTED_PROXY_IPS`.
+   * *Persistence & Scalability*: `InMemoryRateLimiter` with automatic and manual stale-key cleanup; routes depend only on abstract interface via `get_rate_limiter()` so `RedisRateLimiter` can be swapped in without modifying endpoints.
 
 ---
 
