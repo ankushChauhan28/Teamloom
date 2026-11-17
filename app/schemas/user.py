@@ -27,6 +27,17 @@ class UserReportsToUpdate(BaseModel):
     reports_to_id: int | None = None
 
 
+class SubordinateInfo(BaseModel):
+    id: int
+    full_name: str
+    designation: str | None = None
+
+
+class UserDeactivateRequest(BaseModel):
+    reassignments: dict[int, int | None] | None = None
+    default_new_manager_id: int | None = None
+
+
 class EmployeeCreate(BaseModel):
     full_name: str
     email: EmailStr

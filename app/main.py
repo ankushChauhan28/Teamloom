@@ -1,11 +1,12 @@
-from contextlib import asynccontextmanager
 import logging
 import sys
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app import models as _models  # noqa: F401 - Register all SQLAlchemy models at startup
 from app.core.config import settings
 from app.core.exceptions import (
     AppException,
@@ -14,10 +15,10 @@ from app.core.exceptions import (
     BadRequestException,
     InvalidCredentialsException,
     ResourceNotFoundException,
+    SupervisorDeactivationConflictException,
     UserAlreadyExistsException,
 )
 from app.core.scheduler import shutdown_scheduler, start_scheduler
-from app import models as _models  # noqa: F401 - Register all SQLAlchemy models at startup
 from app.routes import analytics, auth, leaves, tasks, users
 
 # Configure application logging (drives level via LOG_LEVEL setting and ensures app.* loggers output to stdout)
@@ -97,6 +98,20 @@ def authorization_exception_handler(request: Request, exc: AuthorizationExceptio
 @app.exception_handler(BadRequestException)
 def bad_request_handler(request: Request, exc: BadRequestException):
     return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": exc.message})
+
+
+@app.exception_handler(SupervisorDeactivationConflictException)
+def supervisor_deactivation_conflict_handler(
+    request: Request, exc: SupervisorDeactivationConflictException
+):
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={
+            "detail": exc.message,
+            "unresolved_subordinates": exc.unresolved_subordinates,
+            "subordinates": exc.unresolved_subordinates,
+        },
+    )
 
 
 @app.exception_handler(AppException)

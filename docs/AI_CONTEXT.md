@@ -38,7 +38,7 @@
   * **Slice 4d**: Frontend auth UI (mode toggle, signup form, verification page, unverified notice).
 * **Pending Slices**: Stabilization batch (Slice 5 isolation tests), Slice 4e (employee invite flow), Slices 6–10 (Razorpay billing, lifecycle, invoices, operator CLI), and Slice 11 (go-live checklist).
 * **Alembic Head Revision**: `o5p6q7r8s9t0` (`add_missing_indexes_for_performance`).
-* **Test Suite Health**: **205 collected tests** via `pytest --collect-only -q` (100% passing in CI).
+* **Test Suite Health**: **211 collected tests** via `pytest --collect-only -q` (100% passing in CI).
 
 ---
 
@@ -46,7 +46,7 @@
 1. **Target Execution Order (Owner's Plan)**:
    * **Phase 1: Stabilization Batch**:
      1. `fix/db-indexes` (add missing foreign key and search indexes — Completed).
-     2. `fix/supervisor-deactivation` (require subordinate reassignment before deactivation; return HTTP 409 with affected list).
+     2. `fix/supervisor-deactivation` (require subordinate reassignment before deactivation; return HTTP 409 with affected list — Completed).
      3. `feat/soft-delete-tasks-leaves` (soft-delete columns and scoped filters for tasks and leaves; `audit_logs` table deferred).
      4. `test/tenant-isolation-suite` (Slice 5 multi-tenant isolation tests for existing routes).
    * **Phase 2: Slice 4e (Employee Invite Flow)**:

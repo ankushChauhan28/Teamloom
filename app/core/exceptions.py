@@ -43,3 +43,15 @@ class BadRequestException(AppException):
 
     def __init__(self, message: str = "", detail: str | None = None):
         super().__init__(message=message, status_code=400, detail=detail)
+
+
+class SupervisorDeactivationConflictException(AppException):
+    """Raised when deactivating a supervisor with unresolved active direct reports (HTTP 409)."""
+
+    def __init__(
+        self,
+        message: str = "Cannot deactivate user with active direct reports. Please reassign subordinates.",
+        unresolved_subordinates: list[dict] | None = None,
+    ):
+        super().__init__(message=message, status_code=409, detail=message)
+        self.unresolved_subordinates = unresolved_subordinates or []

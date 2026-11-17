@@ -225,63 +225,19 @@ async def test_deactivate_and_reactivate_user_flow(
 
 
 @pytest.mark.asyncio
-async def test_deactivate_manager_clears_direct_reports_supervisor(
-    client: AsyncClient,
-    admin_user: User,
-    employee_user: User,
-    admin_headers: dict[str, str],
-) -> None:
-    """
-    Test deactivating a manager automatically sets their direct reports' reports_to_id to None.
-    """
-    # Create employee_user reporting to admin_user
-    await client.patch(
-        f"/users/{employee_user.id}/reports-to",
-        json={"reports_to_id": admin_user.id},
-        headers=admin_headers,
-    )
-
-    # Deactivate employee_user (who will be a manager for a sub-employee if assigned)
-    # Provision a sub-employee reporting to employee_user
-    sub_emp_res = await client.post(
-        "/users/employees",
-        json={
-            "full_name": "Sub Employee",
-            "email": "sub.emp@example.com",
-            "reports_to_id": employee_user.id,
-            "designation": "Junior Engineer",
-        },
-        headers=admin_headers,
-    )
-    assert sub_emp_res.status_code == status.HTTP_201_CREATED
-    sub_emp_id = sub_emp_res.json()["id"]
-
-    # Deactivate manager (employee_user)
-    deact_res = await client.patch(f"/users/{employee_user.id}/deactivate", headers=admin_headers)
-    assert deact_res.status_code == status.HTTP_200_OK
-
-    # Verify sub_employee's reports_to_id is now None
-    sub_emp_check = await client.get("/users/", headers=admin_headers)
-    sub_emp_obj = next((u for u in sub_emp_check.json() if u["id"] == sub_emp_id), None)
-    assert sub_emp_obj is not None
-    assert sub_emp_obj["reports_to_id"] is None, "Deactivating a manager must set direct reports' reports_to_id to None"
-
-
-@pytest.mark.asyncio
-async def test_deactivate_supervisor_clears_direct_reports(
+async def test_deactivate_supervisor_with_reports_no_instruction_returns_409(
     client: AsyncClient,
     admin_headers: dict[str, str],
 ) -> None:
     """
-    Test that deactivating a supervisor who has 2 active direct reports
-    clears reports_to_id to NULL for both reports.
+    Test deactivating a supervisor with active direct reports without reassignment instruction
+    returns HTTP 409 Conflict with unresolved subordinates, leaving database unchanged.
     """
-    # 1. Create a supervisor
     sup_res = await client.post(
         "/users/employees",
         json={
-            "full_name": "Team Supervisor",
-            "email": "supervisor.team@example.com",
+            "full_name": "Supervisor Alpha",
+            "email": "sup.alpha@example.com",
             "designation": "Engineering Manager",
         },
         headers=admin_headers,
@@ -289,14 +245,13 @@ async def test_deactivate_supervisor_clears_direct_reports(
     assert sup_res.status_code == status.HTTP_201_CREATED
     sup_id = sup_res.json()["id"]
 
-    # 2. Create two active direct reports
     rep1_res = await client.post(
         "/users/employees",
         json={
             "full_name": "Report One",
-            "email": "report.one@example.com",
+            "email": "rep1.alpha@example.com",
             "reports_to_id": sup_id,
-            "designation": "Software Engineer",
+            "designation": "Backend Engineer",
         },
         headers=admin_headers,
     )
@@ -307,27 +262,421 @@ async def test_deactivate_supervisor_clears_direct_reports(
         "/users/employees",
         json={
             "full_name": "Report Two",
-            "email": "report.two@example.com",
+            "email": "rep2.alpha@example.com",
             "reports_to_id": sup_id,
-            "designation": "QA Engineer",
+            "designation": "Frontend Engineer",
         },
         headers=admin_headers,
     )
     assert rep2_res.status_code == status.HTTP_201_CREATED
     rep2_id = rep2_res.json()["id"]
 
-    # 3. Deactivate the supervisor
+    # 1. Deactivate without body -> 409 Conflict
     deact_res = await client.patch(f"/users/{sup_id}/deactivate", headers=admin_headers)
+    assert deact_res.status_code == status.HTTP_409_CONFLICT
+    err_data = deact_res.json()
+    assert "active direct reports" in err_data["detail"].lower()
+    unresolved = err_data["unresolved_subordinates"]
+    assert len(unresolved) == 2
+    unresolved_ids = {u["id"] for u in unresolved}
+    assert unresolved_ids == {rep1_id, rep2_id}
+
+    # Verify each subordinate info has id, full_name, designation
+    rep1_info = next(u for u in unresolved if u["id"] == rep1_id)
+    assert rep1_info["full_name"] == "Report One"
+    assert rep1_info["designation"] == "Backend Engineer"
+
+    # 2. Verify nothing changed in database
+    users_res = await client.get("/users/", headers=admin_headers)
+    users_by_id = {u["id"]: u for u in users_res.json()}
+    assert users_by_id[sup_id]["is_active"] is True
+    assert users_by_id[rep1_id]["reports_to_id"] == sup_id
+    assert users_by_id[rep2_id]["reports_to_id"] == sup_id
+
+
+@pytest.mark.asyncio
+async def test_deactivate_supervisor_partial_reassignment_returns_409(
+    client: AsyncClient,
+    admin_user: User,
+    admin_headers: dict[str, str],
+) -> None:
+    """
+    Test deactivating a supervisor when only some subordinates are mapped and no default is provided
+    returns HTTP 409 Conflict with the unresolved subordinates list, and rolls back all changes.
+    """
+    sup_res = await client.post(
+        "/users/employees",
+        json={
+            "full_name": "Supervisor Beta",
+            "email": "sup.beta@example.com",
+            "designation": "Lead",
+        },
+        headers=admin_headers,
+    )
+    sup_id = sup_res.json()["id"]
+
+    rep1_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Report B1", "email": "rep.b1@example.com", "reports_to_id": sup_id},
+        headers=admin_headers,
+    )
+    rep1_id = rep1_res.json()["id"]
+
+    rep2_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Report B2", "email": "rep.b2@example.com", "reports_to_id": sup_id},
+        headers=admin_headers,
+    )
+    rep2_id = rep2_res.json()["id"]
+
+    # Partial instruction: reassign rep1 to admin_user, omit rep2
+    deact_res = await client.patch(
+        f"/users/{sup_id}/deactivate",
+        json={"reassignments": {str(rep1_id): admin_user.id}},
+        headers=admin_headers,
+    )
+    assert deact_res.status_code == status.HTTP_409_CONFLICT
+    err_data = deact_res.json()
+    unresolved = err_data["unresolved_subordinates"]
+    assert len(unresolved) == 1
+    assert unresolved[0]["id"] == rep2_id
+
+    # Verify database state rolled back completely
+    users_res = await client.get("/users/", headers=admin_headers)
+    users_by_id = {u["id"]: u for u in users_res.json()}
+    assert users_by_id[sup_id]["is_active"] is True
+    assert users_by_id[rep1_id]["reports_to_id"] == sup_id
+    assert users_by_id[rep2_id]["reports_to_id"] == sup_id
+
+
+@pytest.mark.asyncio
+async def test_deactivate_supervisor_explicit_mapping_success(
+    client: AsyncClient,
+    admin_user: User,
+    admin_headers: dict[str, str],
+) -> None:
+    """
+    Test deactivating a supervisor with explicit subordinate-to-manager mapping succeeds in one transaction.
+    """
+    sup_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Supervisor Gamma", "email": "sup.gamma@example.com"},
+        headers=admin_headers,
+    )
+    sup_id = sup_res.json()["id"]
+
+    mgr2_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Manager Two", "email": "mgr2@example.com"},
+        headers=admin_headers,
+    )
+    mgr2_id = mgr2_res.json()["id"]
+
+    rep1_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Report G1", "email": "rep.g1@example.com", "reports_to_id": sup_id},
+        headers=admin_headers,
+    )
+    rep1_id = rep1_res.json()["id"]
+
+    rep2_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Report G2", "email": "rep.g2@example.com", "reports_to_id": sup_id},
+        headers=admin_headers,
+    )
+    rep2_id = rep2_res.json()["id"]
+
+    # Reassign rep1 -> admin_user, rep2 -> mgr2
+    deact_res = await client.patch(
+        f"/users/{sup_id}/deactivate",
+        json={"reassignments": {str(rep1_id): admin_user.id, str(rep2_id): mgr2_id}},
+        headers=admin_headers,
+    )
     assert deact_res.status_code == status.HTTP_200_OK
     assert deact_res.json()["is_active"] is False
 
-    # 4. Verify both reports now have reports_to_id = NULL
     users_res = await client.get("/users/", headers=admin_headers)
-    assert users_res.status_code == status.HTTP_200_OK
     users_by_id = {u["id"]: u for u in users_res.json()}
+    assert users_by_id[sup_id]["is_active"] is False
+    assert users_by_id[rep1_id]["reports_to_id"] == admin_user.id
+    assert users_by_id[rep2_id]["reports_to_id"] == mgr2_id
 
+
+@pytest.mark.asyncio
+async def test_deactivate_supervisor_default_manager_success(
+    client: AsyncClient,
+    admin_user: User,
+    admin_headers: dict[str, str],
+) -> None:
+    """
+    Test deactivating a supervisor with default_new_manager_id applies to all subordinates.
+    """
+    sup_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Supervisor Delta", "email": "sup.delta@example.com"},
+        headers=admin_headers,
+    )
+    sup_id = sup_res.json()["id"]
+
+    rep1_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Report D1", "email": "rep.d1@example.com", "reports_to_id": sup_id},
+        headers=admin_headers,
+    )
+    rep1_id = rep1_res.json()["id"]
+
+    rep2_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Report D2", "email": "rep.d2@example.com", "reports_to_id": sup_id},
+        headers=admin_headers,
+    )
+    rep2_id = rep2_res.json()["id"]
+
+    # Apply default manager
+    deact_res = await client.patch(
+        f"/users/{sup_id}/deactivate",
+        json={"default_new_manager_id": admin_user.id},
+        headers=admin_headers,
+    )
+    assert deact_res.status_code == status.HTTP_200_OK
+    assert deact_res.json()["is_active"] is False
+
+    users_res = await client.get("/users/", headers=admin_headers)
+    users_by_id = {u["id"]: u for u in users_res.json()}
+    assert users_by_id[rep1_id]["reports_to_id"] == admin_user.id
+    assert users_by_id[rep2_id]["reports_to_id"] == admin_user.id
+
+
+@pytest.mark.asyncio
+async def test_deactivate_supervisor_explicit_null_success(
+    client: AsyncClient,
+    admin_user: User,
+    admin_headers: dict[str, str],
+) -> None:
+    """
+    Test deactivating a supervisor with explicit null (no manager) as default or in mapping.
+    """
+    # Case 1: default_new_manager_id = None
+    sup_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Supervisor Epsilon", "email": "sup.eps@example.com"},
+        headers=admin_headers,
+    )
+    sup_id = sup_res.json()["id"]
+
+    rep1_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Report E1", "email": "rep.e1@example.com", "reports_to_id": sup_id},
+        headers=admin_headers,
+    )
+    rep1_id = rep1_res.json()["id"]
+
+    deact_res = await client.patch(
+        f"/users/{sup_id}/deactivate",
+        json={"default_new_manager_id": None},
+        headers=admin_headers,
+    )
+    assert deact_res.status_code == status.HTTP_200_OK
+
+    users_res = await client.get("/users/", headers=admin_headers)
+    users_by_id = {u["id"]: u for u in users_res.json()}
+    assert users_by_id[sup_id]["is_active"] is False
     assert users_by_id[rep1_id]["reports_to_id"] is None
-    assert users_by_id[rep2_id]["reports_to_id"] is None
+
+    # Case 2: mixed reassignments: {repA: null, repB: admin}
+    sup2_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Supervisor Zeta", "email": "sup.zeta@example.com"},
+        headers=admin_headers,
+    )
+    sup2_id = sup2_res.json()["id"]
+
+    repA_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Report ZA", "email": "rep.za@example.com", "reports_to_id": sup2_id},
+        headers=admin_headers,
+    )
+    repA_id = repA_res.json()["id"]
+
+    repB_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Report ZB", "email": "rep.zb@example.com", "reports_to_id": sup2_id},
+        headers=admin_headers,
+    )
+    repB_id = repB_res.json()["id"]
+
+    deact2_res = await client.patch(
+        f"/users/{sup2_id}/deactivate",
+        json={"reassignments": {str(repA_id): None, str(repB_id): admin_user.id}},
+        headers=admin_headers,
+    )
+    assert deact2_res.status_code == status.HTTP_200_OK
+
+    users2_res = await client.get("/users/", headers=admin_headers)
+    users2_by_id = {u["id"]: u for u in users2_res.json()}
+    assert users2_by_id[repA_id]["reports_to_id"] is None
+    assert users2_by_id[repB_id]["reports_to_id"] == admin_user.id
+
+
+@pytest.mark.asyncio
+async def test_deactivate_supervisor_invalid_managers_rejected(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+) -> None:
+    """
+    Test deactivating a supervisor rejects invalid managers (nonexistent, inactive, self, cycle)
+    and verifies atomic rollback.
+    """
+    sup_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Supervisor Theta", "email": "sup.theta@example.com"},
+        headers=admin_headers,
+    )
+    sup_id = sup_res.json()["id"]
+
+    rep_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Report TH", "email": "rep.th@example.com", "reports_to_id": sup_id},
+        headers=admin_headers,
+    )
+    rep_id = rep_res.json()["id"]
+
+    # 1. Non-existent supervisor -> 404
+    res_404 = await client.patch(
+        f"/users/{sup_id}/deactivate",
+        json={"default_new_manager_id": 999999},
+        headers=admin_headers,
+    )
+    assert res_404.status_code == status.HTTP_404_NOT_FOUND
+
+    # 2. Inactive supervisor -> 400
+    inactive_emp_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Inactive Emp", "email": "inactive.emp@example.com"},
+        headers=admin_headers,
+    )
+    inact_id = inactive_emp_res.json()["id"]
+    await client.patch(f"/users/{inact_id}/deactivate", headers=admin_headers)
+
+    res_inact = await client.patch(
+        f"/users/{sup_id}/deactivate",
+        json={"default_new_manager_id": inact_id},
+        headers=admin_headers,
+    )
+    assert res_inact.status_code == status.HTTP_400_BAD_REQUEST
+    assert "inactive" in res_inact.json()["detail"].lower()
+
+    # 3. Target user being deactivated as manager -> 400
+    res_self_sup = await client.patch(
+        f"/users/{sup_id}/deactivate",
+        json={"default_new_manager_id": sup_id},
+        headers=admin_headers,
+    )
+    assert res_self_sup.status_code == status.HTTP_400_BAD_REQUEST
+
+    # 4. Self-reporting (subordinate reporting to themselves) -> 400
+    res_self = await client.patch(
+        f"/users/{sup_id}/deactivate",
+        json={"reassignments": {str(rep_id): rep_id}},
+        headers=admin_headers,
+    )
+    assert res_self.status_code == status.HTTP_400_BAD_REQUEST
+
+    # 5. Cycle: create sub-report of rep_id, then try to assign rep_id to that sub-report
+    sub_rep_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Sub Report", "email": "sub.rep@example.com", "reports_to_id": rep_id},
+        headers=admin_headers,
+    )
+    sub_rep_id = sub_rep_res.json()["id"]
+
+    res_cycle = await client.patch(
+        f"/users/{sup_id}/deactivate",
+        json={"reassignments": {str(rep_id): sub_rep_id}},
+        headers=admin_headers,
+    )
+    assert res_cycle.status_code == status.HTTP_400_BAD_REQUEST
+    assert "circular" in res_cycle.json()["detail"].lower()
+
+    # Verify atomic rollback across all failed attempts
+    users_res = await client.get("/users/", headers=admin_headers)
+    users_by_id = {u["id"]: u for u in users_res.json()}
+    assert users_by_id[sup_id]["is_active"] is True
+    assert users_by_id[rep_id]["reports_to_id"] == sup_id
+
+
+@pytest.mark.asyncio
+async def test_deactivate_user_non_admin_forbidden(
+    client: AsyncClient,
+    employee_user: User,
+    employee_headers: dict[str, str],
+) -> None:
+    """
+    Test non-admin user cannot deactivate an employee (HTTP 403 Forbidden).
+    """
+    res = await client.patch(
+        f"/users/{employee_user.id}/deactivate",
+        headers=employee_headers,
+    )
+    assert res.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.asyncio
+async def test_deactivated_user_old_tasks_and_leaves_still_readable(
+    client: AsyncClient,
+    admin_user: User,
+    admin_headers: dict[str, str],
+) -> None:
+    """
+    Test that deactivating a user only blocks login and preserves all historical tasks and leaves.
+    """
+    emp_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Historical User", "email": "historical@example.com"},
+        headers=admin_headers,
+    )
+    emp_id = emp_res.json()["id"]
+
+    # Create task assigned to employee
+    task_res = await client.post(
+        "/tasks/",
+        json={
+            "title": "Legacy Project Task",
+            "description": "Historical task record",
+            "assigned_to": emp_id,
+            "priority": "HIGH",
+            "due_datetime": "2026-12-31T23:59:59Z",
+        },
+        headers=admin_headers,
+    )
+    assert task_res.status_code == status.HTTP_201_CREATED
+    task_id = task_res.json()["id"]
+
+    # Create leave request for employee directly or as admin
+    leave_res = await client.post(
+        "/leaves/",
+        json={
+            "reason": "Family vacation",
+            "start_date": "2026-12-01",
+            "end_date": "2026-12-05",
+        },
+        headers=admin_headers,  # admin creates own leave as sanity check, or we check existing leave
+    )
+    assert leave_res.status_code == status.HTTP_201_CREATED
+
+    # Deactivate the employee
+    deact_res = await client.patch(f"/users/{emp_id}/deactivate", headers=admin_headers)
+    assert deact_res.status_code == status.HTTP_200_OK
+
+    # Verify task still exists and is readable
+    get_task_res = await client.get(f"/tasks/{task_id}", headers=admin_headers)
+    assert get_task_res.status_code == status.HTTP_200_OK
+    assert get_task_res.json()["assigned_to"] == emp_id
+
+    # Verify tasks list still includes the task
+    tasks_list_res = await client.get("/tasks/", headers=admin_headers)
+    tasks_list = tasks_list_res.json()
+    assert any(t["id"] == task_id for t in tasks_list)
 
 
 @pytest.mark.asyncio
