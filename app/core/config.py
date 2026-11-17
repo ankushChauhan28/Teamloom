@@ -36,7 +36,11 @@ class Settings(BaseSettings):
     # Trusted Proxy IPs (e.g. Nginx, Cloudflare reverse proxy IPs)
     TRUSTED_PROXY_IPS: list[str] = []
 
-    # Rate Limiting Configuration
+    # Rate Limiting Configuration (Level 1 Dual-Key Limiter)
+    RATE_LIMIT_AUTH_ATTEMPTS: int = 10
+    RATE_LIMIT_AUTH_WINDOW_SECONDS: int = 900  # 15 minutes
+    RATE_LIMIT_IP_CEILING_ATTEMPTS: int = 100
+    RATE_LIMIT_IP_CEILING_WINDOW_SECONDS: int = 900  # 15 minutes
     REDIS_URL: str = "redis://localhost:6379/0"
     RATE_LIMITER_BACKEND: str = "memory"
 

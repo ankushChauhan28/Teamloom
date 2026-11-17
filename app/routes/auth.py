@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.email import send_verification_email
 from app.core.exceptions import AuthenticationException
-from app.core.rate_limit import RateLimiter, get_rate_limiter
+from app.core.rate_limit import RateLimiter, extract_client_ip, get_rate_limiter
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -32,20 +32,6 @@ from app.services import auth_service
 from app.services.permission_service import populate_user_effective_cache
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
-
-
-def extract_client_ip(request: Request) -> str:
-    """
-    Extracts client IP address:
-    - Only trusts X-Forwarded-For if request.client.host is in TRUSTED_PROXY_IPS.
-    - Otherwise, falls back strictly to the direct connection IP (request.client.host).
-    """
-    client_host = request.client.host if request.client and request.client.host else "127.0.0.1"
-    if client_host in settings.TRUSTED_PROXY_IPS:
-        x_forwarded_for = request.headers.get("X-Forwarded-For")
-        if x_forwarded_for:
-            return x_forwarded_for.split(",")[0].strip()
-    return client_host
 
 
 def set_refresh_token_cookie(response: Response, refresh_token: str) -> None:
@@ -82,7 +68,11 @@ async def signup(
         rate_limiter = get_rate_limiter()
 
     client_ip = extract_client_ip(request)
-    rate_result = await rate_limiter.check_and_increment(f"signup:{client_ip}")
+    rate_result = await rate_limiter.check_auth_rate_limit(
+        client_ip=client_ip,
+        identifier=signup_in.email,
+        endpoint_prefix="signup",
+    )
     if not rate_result.allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -140,7 +130,11 @@ async def resend_verification_endpoint(
         rate_limiter = get_rate_limiter()
 
     client_ip = extract_client_ip(request)
-    rate_result = await rate_limiter.check_and_increment(f"resend_verification:{client_ip}")
+    rate_result = await rate_limiter.check_auth_rate_limit(
+        client_ip=client_ip,
+        identifier=req.email,
+        endpoint_prefix="resend_verification",
+    )
     if not rate_result.allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -180,7 +174,11 @@ async def login(
         rate_limiter = get_rate_limiter()
 
     client_ip = extract_client_ip(request)
-    rate_result = await rate_limiter.check_and_increment(f"login:{client_ip}")
+    rate_result = await rate_limiter.check_auth_rate_limit(
+        client_ip=client_ip,
+        identifier=login_in.identifier,
+        endpoint_prefix="login",
+    )
     if not rate_result.allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -216,7 +214,11 @@ async def swagger_login(
         rate_limiter = get_rate_limiter()
 
     client_ip = extract_client_ip(request)
-    rate_result = await rate_limiter.check_and_increment(f"login:{client_ip}")
+    rate_result = await rate_limiter.check_auth_rate_limit(
+        client_ip=client_ip,
+        identifier=form_data.username,
+        endpoint_prefix="login",
+    )
     if not rate_result.allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,

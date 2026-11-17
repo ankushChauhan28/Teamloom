@@ -362,11 +362,17 @@ async def test_admin_created_employee_login_without_verification(
 
 
 @pytest.mark.asyncio
-async def test_rate_limiting_signup_and_resend(client: AsyncClient) -> None:
+async def test_rate_limiting_signup_and_resend(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """
     Verifies that POST /auth/signup and POST /auth/resend-verification are rate-limited
     using get_rate_limiter() with their dedicated key prefixes.
     """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "RATE_LIMIT_IP_CEILING_ATTEMPTS", 10)
     _in_memory_instance.reset()
 
     # 10 signup requests succeed

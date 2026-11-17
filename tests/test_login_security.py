@@ -176,11 +176,11 @@ async def test_ip_rate_limiting_exceeded_returns_429(
     """
     headers = {"X-Forwarded-For": "192.168.1.100"}
 
-    # Send 10 login requests from IP 192.168.1.100
-    for i in range(10):
+    # Send 10 login requests from IP 192.168.1.100 for this identifier
+    for _ in range(10):
         res = await client.post(
             "/auth/login",
-            json={"identifier": f"900000000{i}", "password": "InvalidPassword!", "mode": "employee"},
+            json={"identifier": employee_user.employee_code, "password": "InvalidPassword!", "mode": "employee"},
             headers=headers,
         )
         assert res.status_code != status.HTTP_429_TOO_MANY_REQUESTS
@@ -268,7 +268,7 @@ async def test_rate_limit_ignores_spoofed_header_without_trusted_proxy(
     for i in range(10):
         res = await client.post(
             "/auth/login",
-            json={"identifier": f"900000000{i}", "password": "WrongPassword!", "mode": "employee"},
+            json={"identifier": employee_user.employee_code, "password": "WrongPassword!", "mode": "employee"},
             headers={"X-Forwarded-For": f"198.51.100.{i}"},
         )
         assert res.status_code != status.HTTP_429_TOO_MANY_REQUESTS
@@ -304,7 +304,7 @@ async def test_rate_limit_uses_forwarded_header_when_proxy_trusted(
     for i in range(10):
         res = await client.post(
             "/auth/login",
-            json={"identifier": f"800000000{i}", "password": "WrongPassword!", "mode": "employee"},
+            json={"identifier": employee_user.employee_code, "password": "WrongPassword!", "mode": "employee"},
             headers={"X-Forwarded-For": f"{client_ip_a}, 127.0.0.1"},
         )
         assert res.status_code != status.HTTP_429_TOO_MANY_REQUESTS

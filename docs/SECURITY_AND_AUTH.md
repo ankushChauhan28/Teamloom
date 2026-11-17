@@ -168,19 +168,29 @@ Authority is governed by integer `access_level` on `users` (`app/core/permission
   - `expose_headers = ["X-Total-Count"]`: Permits frontend Axios client to read pagination counts.
 - **Production Vulnerability Note**: Ensure `CORS_ORIGINS` in production is set strictly to the production frontend domain (e.g., `https://app.teamloom.com`) and never set to wildcard `["*"]` when `allow_credentials = True`.
 
-### 4.4 Rate Limiting & Brute-Force Defense
+### 4.4 Rate Limiting & Brute-Force Defense (Level 1)
 - **Architecture (`app/core/rate_limit.py`)**:
-  - Implements sliding-window rate limiting.
-  - Keyed by client IP (`extract_client_ip` in `app/routes/auth.py`).
-  - Supports `X-Forwarded-For` extraction **only** if the immediate connection IP matches `settings.TRUSTED_PROXY_IPS`, preventing IP spoofing attacks.
-- **Protected Endpoints**:
-  - `POST /auth/login`: 10 requests per 15 minutes per IP (`login:{ip}`).
-  - `POST /auth/signup`: 10 requests per 15 minutes per IP (`signup:{ip}`).
-  - `POST /auth/resend-verification`: 10 requests per 15 minutes per IP (`resend_verification:{ip}`).
-- **Horizontal Scaling Vulnerability**:
-  - When `RATE_LIMITER_BACKEND=memory` (default), rate limit counters are stored in Python process memory.
-  - If deployed across multiple Uvicorn workers or container replicas, an attacker can bypass rate limits by distributing requests across workers.
-  - `RATE_LIMITER_BACKEND=redis` is fully implemented using Redis sorted sets (ZSET) and must be enabled in production.
+  - Implements an abstract `RateLimiter` interface (`check_and_increment`, `check_auth_rate_limit`, `cleanup`, `reset`) with `InMemoryRateLimiter` as the active implementation.
+  - Endpoints depend strictly on the `RateLimiter` abstraction via FastAPI dependency injection (`get_rate_limiter`), allowing the implementation to be replaced (e.g. with `RedisRateLimiter`) without touching routes.
+  - **Sliding-Window Algorithm**: Tracks exact millisecond timestamps per key, purges entries older than the window, and calculates precise integer `Retry-After` seconds using `math.ceil(oldest_ts + window - now)`.
+  - **Memory Safety & Stale-Key Cleanup**: `InMemoryRateLimiter` includes automatic periodic eviction (triggered every 100 calls) and manual `cleanup()` to prune keys whose timestamps have completely expired, preventing unbounded memory growth.
+- **Dual-Key Auth Rate Limiting**:
+  All protected authentication endpoints (`POST /auth/login`, `POST /auth/swagger-login`, `POST /auth/signup`, `POST /auth/resend-verification`) must pass two independent sliding-window checks:
+  1. **Compound Key `{client IP, normalized identifier}`** (Default: 10 attempts / 15 minutes, configurable via `RATE_LIMIT_AUTH_ATTEMPTS` and `RATE_LIMIT_AUTH_WINDOW_SECONDS`):
+     - Prevents office NAT IP lockout across different users sharing an egress gateway. Each normalized (trimmed and lowercased) email or employee code receives its own rate bucket.
+  2. **Per-IP Ceiling across all identifiers** (Default: 100 attempts / 15 minutes, configurable via `RATE_LIMIT_IP_CEILING_ATTEMPTS` and `RATE_LIMIT_IP_CEILING_WINDOW_SECONDS`):
+     - Protects against distributed password spraying attacks where an attacker rotates through many user accounts from a single IP.
+- **Anti-Enumeration Guard & Timing Defense**:
+  - On rate limit exhaustion, the endpoint immediately returns HTTP 429 Too Many Requests with a `Retry-After` header.
+  - The HTTP 429 response body and status code are completely identical regardless of whether the identifier corresponds to an existing user or non-existent account.
+  - Dummy bcrypt comparison (`DUMMY_HASH`) remains active during authentication so timing analysis cannot distinguish valid from invalid users.
+- **Client IP Resolution & Trusted Proxy Defense**:
+  - `extract_client_ip(request)` safely resolves the client IP.
+  - `X-Forwarded-For` is strictly ignored by default, binding to the direct socket connection host (`request.client.host`).
+  - Only when the direct connection host is registered in `settings.TRUSTED_PROXY_IPS` is `X-Forwarded-For` parsed (traversing right-to-left to extract the rightmost untrusted client IP), preventing header spoofing bypasses.
+- **Deployment Notice (Single-Worker vs Multi-Worker)**:
+  - In single-worker / development environments, `InMemoryRateLimiter` operates safely with zero external dependencies.
+  - In horizontally scaled multi-worker or multi-container production environments, in-memory state is isolated per process. The abstract `RateLimiter` interface is designed to support a Redis-backed sliding window (`RedisRateLimiter`) when distributed scaling is provisioned.
 
 ### 4.5 Password Hashing & Cryptography
 - **Algorithm**: **Bcrypt** (`bcrypt` package, version `5.0.0`).

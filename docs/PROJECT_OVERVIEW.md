@@ -492,6 +492,10 @@ A recursive search across all source directories (`app/`, `frontend/src/`, `test
 | `TRUSTED_PROXY_IPS` | IP list of reverse proxies trusted for `X-Forwarded-For` header | Optional (default: `[]`) | `app/core/config.py`, `app/routes/auth.py` |
 | `RATE_LIMITER_BACKEND` | Switch between `memory` and `redis` rate limit storage | Optional (default: `memory`) | `app/core/config.py`, `app/core/rate_limit.py` |
 | `REDIS_URL` | Redis connection URL for distributed rate limiting | Optional (default: `redis://localhost:6379/0`) | `app/core/config.py`, `app/core/rate_limit.py` |
+| `RATE_LIMIT_AUTH_ATTEMPTS` | Maximum allowed attempts per compound key `{client IP, identifier}` | Optional (default: `10`) | `app/core/config.py`, `app/core/rate_limit.py` |
+| `RATE_LIMIT_AUTH_WINDOW_SECONDS` | Sliding window in seconds for compound rate limit | Optional (default: `900` = 15m) | `app/core/config.py`, `app/core/rate_limit.py` |
+| `RATE_LIMIT_IP_CEILING_ATTEMPTS` | Looser per-IP ceiling across all identifiers against spraying | Optional (default: `100`) | `app/core/config.py`, `app/core/rate_limit.py` |
+| `RATE_LIMIT_IP_CEILING_WINDOW_SECONDS` | Sliding window in seconds for per-IP ceiling | Optional (default: `900` = 15m) | `app/core/config.py`, `app/core/rate_limit.py` |
 | `EMAIL_BACKEND` | Switch between `auto`, `smtp`, and `console` email senders | Optional (default: `auto`) | `app/core/config.py`, `app/core/email.py` |
 | `EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS`| Expiration time for email verification tokens | Optional (default: `24`) | `app/core/config.py`, `app/services/auth_service.py` |
 | `EMAIL_VERIFICATION_URL`| Base URL for verification link | Optional (falls back to `{FRONTEND_URL}/verify-email`) | `app/core/config.py`, `app/core/email.py` |
