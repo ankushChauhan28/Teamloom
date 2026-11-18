@@ -4,7 +4,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.email import send_verification_email
+from app.core.email import send_verification_email, send_invite_email, send_password_reset_email
 from app.core.exceptions import AuthenticationException
 from app.core.rate_limit import RateLimiter, extract_client_ip, get_rate_limiter
 from app.core.security import (
@@ -17,11 +17,17 @@ from app.core.security import (
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.user import (
+    AcceptInviteRequest,
+    AcceptInviteResponse,
     EmailVerificationRequest,
     EmailVerificationResponse,
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
     PasswordChange,
     ResendVerificationRequest,
     ResendVerificationResponse,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
     SignupRequest,
     SignupResponse,
     Token,
@@ -299,3 +305,59 @@ async def change_password(
     Requires authentication (allows users with pending password change).
     """
     return await auth_service.change_password(db=db, user=current_user, pwd_in=pwd_in)
+
+
+@router.post("/accept-invite", response_model=AcceptInviteResponse)
+async def accept_invite(
+    req: AcceptInviteRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter),
+):
+    client_ip = extract_client_ip(request)
+    ip_res = await rate_limiter.check_and_increment(f"accept_invite:ip:{client_ip}", settings.ACCEPT_INVITE_IP_LIMIT, settings.ACCEPT_INVITE_IP_WINDOW)
+    if not ip_res.allowed:
+        raise HTTPException(429, "Too many attempts.", headers={"Retry-After": str(ip_res.retry_after_seconds)})
+    await auth_service.accept_invite(db=db, token=req.token, password=req.password)
+    return AcceptInviteResponse()
+
+
+@router.post("/forgot-password", response_model=ForgotPasswordResponse)
+async def forgot_password(
+    req: ForgotPasswordRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter),
+):
+    client_ip = extract_client_ip(request)
+    rate_result = await rate_limiter.check_auth_rate_limit(
+        client_ip=client_ip,
+        identifier=req.email,
+        endpoint_prefix="forgot_password",
+        compound_limit=settings.FORGOT_PASSWORD_COMPOUND_LIMIT,
+        compound_window=settings.FORGOT_PASSWORD_COMPOUND_WINDOW,
+        ip_limit=settings.FORGOT_PASSWORD_IP_LIMIT,
+        ip_window=settings.FORGOT_PASSWORD_IP_WINDOW,
+    )
+    if not rate_result.allowed:
+        raise HTTPException(429, "Too many requests.", headers={"Retry-After": str(rate_result.retry_after_seconds)})
+    _, email, full_name, raw_token = await auth_service.forgot_password(db=db, email=req.email)
+    if raw_token and email and full_name:
+        background_tasks.add_task(send_password_reset_email, email=email, full_name=full_name, token=raw_token)
+    return ForgotPasswordResponse()
+
+
+@router.post("/reset-password", response_model=ResetPasswordResponse)
+async def reset_password(
+    req: ResetPasswordRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter),
+):
+    client_ip = extract_client_ip(request)
+    ip_res = await rate_limiter.check_and_increment(f"reset_password:ip:{client_ip}", settings.RESET_PASSWORD_IP_LIMIT, settings.RESET_PASSWORD_IP_WINDOW)
+    if not ip_res.allowed:
+        raise HTTPException(429, "Too many attempts.", headers={"Retry-After": str(ip_res.retry_after_seconds)})
+    await auth_service.reset_password(db=db, token=req.token, new_password=req.new_password)
+    return ResetPasswordResponse()
