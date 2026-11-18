@@ -38,7 +38,8 @@
   * **Slice 4d**: Frontend auth UI (mode toggle, signup form, verification page, unverified notice).
   * **Slice 5 (Stabilization Batch Completed)**: Complete API-level tenant isolation test suite (`tests/test_tenant_isolation.py`, `tests/fixtures_tenant_isolation.py`), proving zero cross-tenant leakage across all routes.
   * **Rate Limiting (Level 1 Completed)**: Abstract `RateLimiter` interface, `InMemoryRateLimiter` sliding-window implementation, dual-key auth protection (compound `{client IP, normalized identifier}` 10/15m + per-IP ceiling 100/15m), stale-key cleanup, trusted proxy support, and anti-enumeration.
-* **Pending Slices**: Frontend CI check integration, Slice 4e (employee invite flow), Slice 6 (plans & billing), Slices 7–10 (Razorpay billing, lifecycle, invoices, operator CLI), and Slice 11 (go-live checklist).
+  * **Frontend CI Checks (Completed)**: Added `frontend-checks` job to GitHub Actions CI running Node.js 22 LTS, `npm ci` with cache, `oxlint` linting, and `vite build` production bundling.
+* **Pending Slices**: Slice 4e (employee invite flow), Slice 6 (plans & billing), Slices 7–10 (Razorpay billing, lifecycle, invoices, operator CLI), and Slice 11 (go-live checklist).
 * **Alembic Head Revision**: `p6q7r8s9t0u1` (`add_soft_delete_to_tasks`).
 * **Test Suite Health**: **316 collected tests** via `pytest --collect-only -q` (100% passing in CI).
 
@@ -53,11 +54,11 @@
      4. `test/tenant-isolation-suite` (Slice 5 multi-tenant isolation tests for all existing routes — Completed).
    * **Phase 2: Rate Limiting & Next Planned Work**:
      * **Rate Limiting (Level 1 Completed on `fix/rate-limiting`)**: Dual-key sliding window (`{client IP, identifier}` 10/15m + IP ceiling 100/15m) behind swappable `RateLimiter` interface with stale-key cleanup and trusted-proxy defense.
+     * **Frontend CI Checks (Completed on `ci/frontend-checks`)**: Automated `npm run lint` and `npm run build` in GitHub Actions workflow.
      * **Next Planned Work**:
-       1. Frontend CI check: Add `npm run lint` and `npm run build` to GitHub Actions workflow.
-       2. Slice 4e (Employee Invite Flow): One-time set-password invite link (hashed, single-use, 24h expiring token), admin Resend/Revoke in roster, no temp passwords. Updates isolation suite to cover invite endpoints. Ships before Slice 6 so seat caps apply to invites cleanly.
-       3. Slice 6 (Plans & Billing): Plan subscription model, `pending_payment` access gating, race-safe seat limit enforcement.
-   *(Note: `docs/TEAMLOOM_SAAS_REQUIREMENTS.md` originally suggested Slice 4e -> Slice 5 -> Slice 6; the owner's plan prioritizes codebase stabilization and lands the Slice 5 isolation test suite first, followed by rate limiting stabilization, Slice 4e, and Slice 6).*
+       1. Slice 4e (Employee Invite Flow): One-time set-password invite link (hashed, single-use, 24h expiring token), admin Resend/Revoke in roster, no temp passwords. Updates isolation suite to cover invite endpoints. Ships before Slice 6 so seat caps apply to invites cleanly.
+       2. Slice 6 (Plans & Billing): Plan subscription model, `pending_payment` access gating, race-safe seat limit enforcement.
+   *(Note: `docs/TEAMLOOM_SAAS_REQUIREMENTS.md` originally suggested Slice 4e -> Slice 5 -> Slice 6; the owner's plan prioritizes codebase stabilization and lands the Slice 5 isolation test suite first, followed by rate limiting stabilization, frontend CI checks, Slice 4e, and Slice 6).*
 2. **Supervisor Deactivation Safety**: Deactivating a supervisor must **not** silently set direct reports' `reports_to_id = NULL`. The API must require the admin to reassign subordinates first, returning HTTP 409 Conflict with the subordinate list if reassignment is needed.
 3. **Soft-Delete for Tasks & Leaves**: Soft-delete is implemented for tasks (`is_deleted`, `deleted_at`, `deleted_by`, version bump; stabilization item 3 done for tasks). Task restore and leave soft delete are deferred as later items (since no real leave delete flow exists today; approve, reject, and cancel are status changes). An independent `audit_logs` table is deferred to a later SaaS slice.
 4. **Rate Limiting**: **Level 1 Implemented & Resolved (on `fix/rate-limiting`)**.
@@ -74,10 +75,10 @@
 * **Branch Base**: Always branch from an up-to-date `main`. Never commit directly to `main`.
 * **Commit Style**: Use conventional commit messages (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`).
 * **PR Process**: Push the branch to `origin`, but **do not open the Pull Request** (the repository owner opens and reviews PRs on GitHub).
-* **CI Quality Gate**: GitHub Actions (`.github/workflows/ci.yml`) runs on push and PR, executing strictly:
-  1. `alembic upgrade head` (database migration validation on PostgreSQL 16 service).
-  2. `pytest --cov=app --cov-report=term-missing` (backend test suite on isolated test DB).
-  *Note: Frontend linting (`npm run lint` using `oxlint`) and frontend build (`npm run build` using `vite build`) are **not** part of CI and must be validated locally before pushing. Python `ruff` is also not currently in CI.*
+* **CI Quality Gate**: GitHub Actions (`.github/workflows/ci.yml`) runs on push and PR, executing two parallel jobs:
+  1. `backend-tests`: PostgreSQL 16 service, database migration validation (`alembic upgrade head`), and isolated backend test suite (`pytest --cov=app --cov-report=term-missing`).
+  2. `frontend-checks`: Node.js 22 LTS environment, dependency installation (`npm ci` with cache), linter verification (`npm run lint` via `oxlint`), and production build verification (`npm run build`).
+  *Note: Python `ruff` is not currently in CI.*
 * **Migration Discipline**: **Never edit or rename existing Alembic migration files**. Always generate a new forward migration (`alembic revision --autogenerate -m "..."`).
 * **Code Verification**: Always inspect actual code and configuration files before modifying them; do not assume or invent facts.
 * **Context Maintenance**: Update Section 3 of this document (`docs/AI_CONTEXT.md`) at the conclusion of every PR.

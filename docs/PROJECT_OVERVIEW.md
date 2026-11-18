@@ -546,8 +546,10 @@ A recursive search across all source directories (`app/`, `frontend/src/`, `test
   - `app`: Builds root `Dockerfile`, depends on healthy `db` and `redis`, exposed on `8000:8000`.
   - `frontend`: Builds `frontend/Dockerfile`, exposed on `5173:5173`.
 - **CI/CD Pipeline (`.github/workflows/ci.yml`)**:
-  - Triggers on push/PR to `main`, `master`, `dev`, `feat/**`, `fix/**`.
-  - Spins up PostgreSQL 16 service container, installs dependencies, creates database `employee_task_db`, executes `alembic upgrade head`, and runs `pytest --cov=app`.
+  - Triggers on push/PR to `main`, `master`, `dev`, `feat/**`, `fix/**`, `ci/**`.
+  - Runs two parallel jobs on every push and pull request:
+    1. `backend-tests`: Spins up PostgreSQL 16 service container, installs dependencies, creates database `employee_task_db`, executes `alembic upgrade head`, and runs `pytest --cov=app --cov-report=term-missing`.
+    2. `frontend-checks`: Sets up Node.js 22 LTS with npm cache, installs dependencies via `npm ci`, runs `npm run lint` (`oxlint`), and verifies production build with `npm run build`.
 
 #### Step-by-Step Guide to Run Locally From Scratch:
 
