@@ -64,9 +64,18 @@ class User(Base):
         index=True,
     )
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    invitation_status = Column(
+        String(20),
+        CheckConstraint("invitation_status IN ('PENDING', 'ACTIVE', 'REVOKED')", name="check_user_invitation_status"),
+        nullable=False,
+        server_default="ACTIVE",
+    )
+    invitation_accepted_at = Column(DateTime(timezone=True), nullable=True, default=None)
+    tokens_valid_after = Column(DateTime(timezone=True), nullable=True, default=None)
 
     __table_args__ = (
         Index("ix_users_email_lower", func.lower(email), unique=True),
+        Index("ix_users_invitation_status", "invitation_status"),
     )
 
     # Relationships (relationships mapped as strings to avoid circular import issues)
@@ -108,4 +117,5 @@ class User(Base):
     reviewed_leaves = relationship(
         "LeaveRequest", foreign_keys="LeaveRequest.reviewed_by", back_populates="reviewer"
     )
+    user_tokens = relationship("UserToken", back_populates="user", cascade="all, delete-orphan")
 

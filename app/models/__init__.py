@@ -4,6 +4,7 @@ from app.models.organization import OrgStatus, Organization
 from app.models.revoked_token import RevokedToken
 from app.models.task import Task, TaskPriority, TaskStatus
 from app.models.user import User, UserRole
+from app.models.user_token import UserToken
 
 __all__ = [
     "EmailVerificationToken",
@@ -17,4 +18,5 @@ __all__ = [
     "TaskStatus",
     "User",
     "UserRole",
+    "UserToken",
 ]
