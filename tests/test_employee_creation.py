@@ -41,7 +41,8 @@ async def test_admin_create_employee_success(
     assert data["designation"] == "Lead Engineer"
     assert data["role"] == "EMPLOYEE"
     assert re.match(r"^[0-9]{10}$", data["employee_code"])
-    assert data["must_change_password"] is True
+    assert data["invitation_status"] == "PENDING"
+    assert data["delivery_queued"] is True
     assert "password" not in data
     assert "temp_password" not in data
     assert "temporary_password" not in data
@@ -131,35 +132,37 @@ async def test_non_admin_cannot_create_employee(
 @pytest.mark.asyncio
 async def test_must_change_password_enforcement_and_change_flow(
     client: AsyncClient,
-    admin_headers: dict[str, str],
+    db_session: AsyncSession,
+    test_org: Organization,
 ) -> None:
     """
-    Full security flow test:
-    1. Admin creates a new employee. Captured temp_password via mock.
-    2. New employee logs in with temp_password.
-    3. New employee attempts accessing protected route (`GET /tasks/`) -> blocked with 403 password_change_required.
-    4. New employee calls `POST /auth/change-password` -> password updated and flag cleared.
-    5. New employee retries `GET /tasks/` -> access granted (200 OK).
+    Full security flow test for existing users with must_change_password=True:
+    1. Existing employee with must_change_password=True logs in.
+    2. Employee attempts accessing protected route (`GET /tasks/`) -> blocked with 403 password_change_required.
+    3. Employee calls `POST /auth/change-password` -> password updated and flag cleared.
+    4. Employee retries `GET /tasks/` -> access granted (200 OK).
     """
-    captured_passwords = []
+    from app.core.security import hash_password
 
-    def mock_send_email(email, full_name, employee_code, temp_password):
-        captured_passwords.append(temp_password)
-        return True
+    temp_pwd = "InitialTempPassword123!"
+    emp_code = "1000000088"
+    user = User(
+        full_name="Pwd Change User",
+        email="pwd.change@example.com",
+        hashed_password=hash_password(temp_pwd),
+        role=UserRole.EMPLOYEE,
+        access_level=3,
+        employee_code=emp_code,
+        must_change_password=True,
+        is_email_verified=True,
+        is_active=True,
+        invitation_status="ACTIVE",
+        organization_id=test_org.id,
+    )
+    db_session.add(user)
+    await db_session.commit()
 
-    with patch(
-        "app.routes.users.send_employee_welcome_email", side_effect=mock_send_email
-    ):
-        create_res = await client.post(
-            "/users/employees",
-            json={"full_name": "Pwd Change User", "email": "pwd.change@example.com"},
-            headers=admin_headers,
-        )
-        assert create_res.status_code == status.HTTP_201_CREATED
-        temp_pwd = captured_passwords[0]
-
-    # Step 2: Employee logs in with temp password and assigned employee_code
-    emp_code = create_res.json()["employee_code"]
+    # Step 1: Employee logs in with credentials
     login_res = await client.post(
         "/auth/login",
         json={"identifier": emp_code, "password": temp_pwd, "mode": "employee"},
@@ -168,7 +171,7 @@ async def test_must_change_password_enforcement_and_change_flow(
     emp_token = login_res.json()["access_token"]
     emp_headers = {"Authorization": f"Bearer {emp_token}"}
 
-    # Step 3: Accessing protected route is blocked with 403 password_change_required
+    # Step 2: Accessing protected route is blocked with 403 password_change_required
     task_res = await client.get("/tasks/", headers=emp_headers)
     assert task_res.status_code == status.HTTP_403_FORBIDDEN
     assert task_res.json()["detail"] == "password_change_required"
@@ -177,7 +180,7 @@ async def test_must_change_password_enforcement_and_change_flow(
     assert leave_res.status_code == status.HTTP_403_FORBIDDEN
     assert leave_res.json()["detail"] == "password_change_required"
 
-    # Step 4: Employee changes password via POST /auth/change-password
+    # Step 3: Employee changes password via POST /auth/change-password
     change_res = await client.post(
         "/auth/change-password",
         json={"current_password": temp_pwd, "new_password": "NewPermanentPassword123!"},
@@ -186,28 +189,37 @@ async def test_must_change_password_enforcement_and_change_flow(
     assert change_res.status_code == status.HTTP_200_OK
     assert change_res.json()["must_change_password"] is False
 
-    # Step 5: Employee retries accessing protected route -> 200 OK granted
-    unlocked_res = await client.get("/tasks/", headers=emp_headers)
+    # Step 4: Employee retries accessing protected route -> 200 OK granted
+    # Note: change-password invalidates old sessions, so log in again with new password
+    login_new_res = await client.post(
+        "/auth/login",
+        json={"identifier": emp_code, "password": "NewPermanentPassword123!", "mode": "employee"},
+    )
+    assert login_new_res.status_code == status.HTTP_200_OK
+    new_headers = {"Authorization": f"Bearer {login_new_res.json()['access_token']}"}
+
+    unlocked_res = await client.get("/tasks/", headers=new_headers)
     assert unlocked_res.status_code == status.HTTP_200_OK
 
 
 @pytest.mark.asyncio
-async def test_admin_reset_temp_password(
+async def test_admin_send_password_reset(
     client: AsyncClient,
     admin_headers: dict[str, str],
     employee_user: User,
 ) -> None:
     """
-    Test Admin calling `POST /users/{user_id}/reset-temp-password` resets password and enforces change.
-    Response does not leak temporary password.
+    Test Admin calling `POST /users/{user_id}/send-password-reset` sends reset link.
+    Response does not leak any secret.
     """
     res = await client.post(
-        f"/users/{employee_user.id}/reset-temp-password",
+        f"/users/{employee_user.id}/send-password-reset",
         headers=admin_headers,
     )
     assert res.status_code == status.HTTP_200_OK
     data = res.json()
-    assert data["id"] == employee_user.id
+    assert data["message"] == "Password reset link sent."
+    assert data["delivery_queued"] is True
     assert "password" not in data
     assert "temp_password" not in data
 
@@ -227,29 +239,32 @@ async def test_existing_users_unaffected(
 @pytest.mark.asyncio
 async def test_pending_password_change_blocked_on_users_me(
     client: AsyncClient,
-    admin_headers: dict[str, str],
+    db_session: AsyncSession,
+    test_org: Organization,
 ) -> None:
     """
     Comprehensive Audit Test: Confirm a user with must_change_password = True is blocked
     with HTTP 403 on GET /users/me and PATCH /users/me as well.
     """
-    captured_passwords = []
+    from app.core.security import hash_password
 
-    def mock_send_email(email, full_name, employee_code, temp_password):
-        captured_passwords.append(temp_password)
-        return True
-
-    with patch(
-        "app.routes.users.send_employee_welcome_email", side_effect=mock_send_email
-    ):
-        create_res = await client.post(
-            "/users/employees",
-            json={"full_name": "Audit User", "email": "audit.user@example.com"},
-            headers=admin_headers,
-        )
-        assert create_res.status_code == status.HTTP_201_CREATED
-        temp_pwd = captured_passwords[0]
-        emp_code = create_res.json()["employee_code"]
+    temp_pwd = "AuditPassword123!"
+    emp_code = "1000000089"
+    user = User(
+        full_name="Audit User",
+        email="audit.user@example.com",
+        hashed_password=hash_password(temp_pwd),
+        role=UserRole.EMPLOYEE,
+        access_level=3,
+        employee_code=emp_code,
+        must_change_password=True,
+        is_email_verified=True,
+        is_active=True,
+        invitation_status="ACTIVE",
+        organization_id=test_org.id,
+    )
+    db_session.add(user)
+    await db_session.commit()
 
     login_res = await client.post(
         "/auth/login",
@@ -455,19 +470,19 @@ async def test_create_employee_background_task_delivery(
     admin_headers: dict[str, str],
 ) -> None:
     """
-    Test that create_employee dispatches welcome email via BackgroundTasks:
-    1. The response returns HTTP 201 Created with email_sent = True.
-    2. The email sender receives the correct recipient, full_name, employee_code, and non-empty temp_password.
-    3. The temp_password is never returned in the API response.
+    Test that create_employee dispatches invite email via BackgroundTasks:
+    1. The response returns HTTP 201 Created with delivery_queued = True and invitation_status = PENDING.
+    2. The email sender receives the correct recipient, full_name, employee_code, and non-empty token.
+    3. No secrets/passwords are returned in the API response.
     """
     received_emails = []
 
-    def fake_send_email(email, full_name, employee_code, temp_password):
+    def fake_send_email(email, full_name, employee_code, token):
         received_emails.append({
             "email": email,
             "full_name": full_name,
             "employee_code": employee_code,
-            "temp_password": temp_password,
+            "token": token,
         })
         return True
 
@@ -477,12 +492,13 @@ async def test_create_employee_background_task_delivery(
         "designation": "Backend Engineer",
     }
 
-    with patch("app.routes.users.send_employee_welcome_email", side_effect=fake_send_email):
+    with patch("app.routes.users.send_invite_email", side_effect=fake_send_email):
         response = await client.post("/users/employees", json=payload, headers=admin_headers)
 
     assert response.status_code == status.HTTP_201_CREATED
     data = response.json()
-    assert data["email_sent"] is True
+    assert data["delivery_queued"] is True
+    assert data["invitation_status"] == "PENDING"
     assert "password" not in data
     assert "temp_password" not in data
 
@@ -492,7 +508,7 @@ async def test_create_employee_background_task_delivery(
     assert dispatched["email"] == "bg.employee@example.com"
     assert dispatched["full_name"] == "Background Task Employee"
     assert dispatched["employee_code"] == data["employee_code"]
-    assert len(dispatched["temp_password"]) >= 10
+    assert len(dispatched["token"]) >= 20
 
 
 @pytest.mark.asyncio
@@ -502,8 +518,8 @@ async def test_create_employee_email_failure_does_not_break_response_or_leak_pas
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """
-    Test that a delivery failure or exception inside the welcome email sender
-    does NOT cause HTTP 500 (returns 201 Created) and does not leak the temporary password in logs.
+    Test that a delivery failure or exception inside the invite email sender
+    does NOT cause HTTP 500 (returns 201 Created) and does not leak secrets in logs.
     """
     import logging
     from unittest.mock import MagicMock
@@ -511,7 +527,7 @@ async def test_create_employee_email_failure_does_not_break_response_or_leak_pas
     caplog.set_level(logging.INFO)
 
     mock_sender = MagicMock()
-    mock_sender.send_welcome_email.side_effect = ConnectionError("SMTP relay connection timed out")
+    mock_sender.send_invite_email.side_effect = ConnectionError("SMTP relay connection timed out")
 
     payload = {
         "full_name": "Failing Email Employee",
@@ -522,73 +538,67 @@ async def test_create_employee_email_failure_does_not_break_response_or_leak_pas
         response = await client.post("/users/employees", json=payload, headers=admin_headers)
 
     assert response.status_code == status.HTTP_201_CREATED
-    assert response.json()["email_sent"] is True
+    assert response.json()["delivery_queued"] is True
 
-    # Verify background task caught exception and logged error without leaking password
-    assert "Unhandled exception in background welcome email task for failing.email@example.com" in caplog.text
+    # Verify background task caught exception and logged error without leaking raw tokens
+    assert "Unhandled exception in background invite email task for failing.email@example.com" in caplog.text
     # Verify the mock sender was called
-    mock_sender.send_welcome_email.assert_called_once()
-    called_args = mock_sender.send_welcome_email.call_args[1]
-    temp_pw = called_args.get("temp_password")
-    assert temp_pw is not None
-    assert temp_pw not in caplog.text
+    mock_sender.send_invite_email.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_reset_temp_password_background_task_delivery_and_error_handling(
+async def test_send_password_reset_background_task_delivery_and_error_handling(
     client: AsyncClient,
     admin_headers: dict[str, str],
     employee_user: User,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """
-    Test that reset_employee_temp_password uses BackgroundTasks:
-    1. Dispatches email with updated credentials.
+    Test that send_password_reset uses BackgroundTasks:
+    1. Dispatches password reset email with token link.
     2. Delivery exception does not break HTTP 200 response and does not leak secrets.
     """
     from unittest.mock import MagicMock
 
     received_emails = []
 
-    def fake_send_email(email, full_name, employee_code, temp_password):
+    def fake_send_email(email, full_name, token):
         received_emails.append({
             "email": email,
             "full_name": full_name,
-            "employee_code": employee_code,
-            "temp_password": temp_password,
+            "token": token,
         })
         return True
 
-    with patch("app.routes.users.send_employee_welcome_email", side_effect=fake_send_email):
+    with patch("app.routes.users.send_password_reset_email", side_effect=fake_send_email):
         res = await client.post(
-            f"/users/{employee_user.id}/reset-temp-password",
+            f"/users/{employee_user.id}/send-password-reset",
             headers=admin_headers,
         )
 
     assert res.status_code == status.HTTP_200_OK
     data = res.json()
-    assert data["id"] == employee_user.id
-    assert data["email_sent"] is True
+    assert data["message"] == "Password reset link sent."
+    assert data["delivery_queued"] is True
     assert "password" not in data
     assert "temp_password" not in data
 
     assert len(received_emails) == 1
     assert received_emails[0]["email"] == employee_user.email
-    assert len(received_emails[0]["temp_password"]) >= 10
+    assert len(received_emails[0]["token"]) >= 20
 
-    # Test error handling on reset password via get_email_sender mock
+    # Test error handling on password reset via get_email_sender mock
     mock_failing_sender = MagicMock()
-    mock_failing_sender.send_welcome_email.side_effect = RuntimeError("SMTP auth failure")
+    mock_failing_sender.send_password_reset_email.side_effect = RuntimeError("SMTP auth failure")
 
     with patch("app.core.email.get_email_sender", return_value=mock_failing_sender):
         err_res = await client.post(
-            f"/users/{employee_user.id}/reset-temp-password",
+            f"/users/{employee_user.id}/send-password-reset",
             headers=admin_headers,
         )
 
     assert err_res.status_code == status.HTTP_200_OK
-    assert err_res.json()["email_sent"] is True
-    assert received_emails[0]["temp_password"] not in caplog.text
+    assert err_res.json()["delivery_queued"] is True
 
 
 @pytest.mark.asyncio
@@ -600,15 +610,8 @@ async def test_create_employee_latency_offloaded_from_request(
     Test that create_employee handler does NOT block synchronously on slow email dispatch
     or CPU-bound bcrypt on the main event loop.
     """
-    import asyncio
     import time
 
-    # Mock email sender that simulates a 2-second blocking SMTP network delay in thread
-    def slow_email_sender(email, full_name, employee_code, temp_password):
-        time.sleep(2.0)
-        return True
-
-    # Measure the service layer execution time (which runs bcrypt via asyncio.to_thread and does no SMTP)
     t0 = time.perf_counter()
     response = await client.post(
         "/users/employees",
@@ -618,7 +621,7 @@ async def test_create_employee_latency_offloaded_from_request(
     elapsed = time.perf_counter() - t0
 
     assert response.status_code == status.HTTP_201_CREATED
-    assert response.json()["email_sent"] is True
+    assert response.json()["delivery_queued"] is True
     # In test environment with console/mock sender, response returns in well under 1.5 seconds
 @pytest.mark.asyncio
 async def test_old_emp_code_rejected_at_login(

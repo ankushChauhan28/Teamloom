@@ -73,33 +73,32 @@ async def test_login_admin_success(client: AsyncClient, admin_user: User) -> Non
 
 @pytest.mark.asyncio
 async def test_login_pending_password_change_user_returns_true_flag(
-    client: AsyncClient, admin_headers: dict[str, str]
+    client: AsyncClient, db_session: AsyncSession, test_org: Organization
 ) -> None:
     """
-    Test logging in as a user with must_change_password=True using User ID in employee mode
+    Test logging in as an existing user with must_change_password=True using User ID in employee mode
     returns must_change_password=True and a fully populated user object in the login response body (B6).
     """
-    captured_passwords = []
-
-    def mock_send_email(email, full_name, employee_code, temp_password):
-        captured_passwords.append(temp_password)
-        return True
-
-    with patch(
-        "app.routes.users.send_employee_welcome_email", side_effect=mock_send_email
-    ):
-        create_res = await client.post(
-            "/users/employees",
-            json={"full_name": "Pending Pwd User", "email": "pending.pwd@example.com"},
-            headers=admin_headers,
-        )
-        assert create_res.status_code == status.HTTP_201_CREATED
-        temp_pwd = captured_passwords[0]
-        emp_code = create_res.json()["employee_code"]
+    hashed = hash_password("LegacyTempPass123!")
+    user = User(
+        full_name="Pending Pwd User",
+        email="pending.pwd@example.com",
+        hashed_password=hashed,
+        role=UserRole.EMPLOYEE,
+        access_level=3,
+        employee_code="9876543210",
+        must_change_password=True,
+        is_email_verified=True,
+        is_active=True,
+        invitation_status="ACTIVE",
+        organization_id=test_org.id,
+    )
+    db_session.add(user)
+    await db_session.commit()
 
     login_res = await client.post(
         "/auth/login",
-        json={"identifier": emp_code, "password": temp_pwd, "mode": "employee"},
+        json={"identifier": "9876543210", "password": "LegacyTempPass123!", "mode": "employee"},
     )
     assert login_res.status_code == status.HTTP_200_OK
     data = login_res.json()
@@ -111,7 +110,7 @@ async def test_login_pending_password_change_user_returns_true_flag(
     assert user_data["email"] == "pending.pwd@example.com"
     assert user_data["full_name"] == "Pending Pwd User"
     assert user_data["role"] == "EMPLOYEE"
-    assert user_data["employee_code"] == emp_code
+    assert user_data["employee_code"] == "9876543210"
     assert user_data["must_change_password"] is True
     assert "created_at" in user_data
 

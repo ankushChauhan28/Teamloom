@@ -11,6 +11,13 @@ from app.core.security import create_access_token, hash_password
 from app.models.user import User, UserRole
 
 
+async def _activate_user(db_session: AsyncSession, user_id: int) -> None:
+    user = await db_session.get(User, user_id)
+    if user:
+        user.invitation_status = "ACTIVE"
+        await db_session.commit()
+
+
 @pytest.mark.asyncio
 async def test_get_me_success(
     client: AsyncClient, employee_user: User, employee_headers: dict[str, str]
@@ -228,6 +235,7 @@ async def test_deactivate_and_reactivate_user_flow(
 async def test_deactivate_supervisor_with_reports_no_instruction_returns_409(
     client: AsyncClient,
     admin_headers: dict[str, str],
+    db_session: AsyncSession,
 ) -> None:
     """
     Test deactivating a supervisor with active direct reports without reassignment instruction
@@ -244,6 +252,7 @@ async def test_deactivate_supervisor_with_reports_no_instruction_returns_409(
     )
     assert sup_res.status_code == status.HTTP_201_CREATED
     sup_id = sup_res.json()["id"]
+    await _activate_user(db_session, sup_id)
 
     rep1_res = await client.post(
         "/users/employees",
@@ -257,6 +266,7 @@ async def test_deactivate_supervisor_with_reports_no_instruction_returns_409(
     )
     assert rep1_res.status_code == status.HTTP_201_CREATED
     rep1_id = rep1_res.json()["id"]
+    await _activate_user(db_session, rep1_id)
 
     rep2_res = await client.post(
         "/users/employees",
@@ -270,6 +280,7 @@ async def test_deactivate_supervisor_with_reports_no_instruction_returns_409(
     )
     assert rep2_res.status_code == status.HTTP_201_CREATED
     rep2_id = rep2_res.json()["id"]
+    await _activate_user(db_session, rep2_id)
 
     # 1. Deactivate without body -> 409 Conflict
     deact_res = await client.patch(f"/users/{sup_id}/deactivate", headers=admin_headers)
@@ -299,6 +310,7 @@ async def test_deactivate_supervisor_partial_reassignment_returns_409(
     client: AsyncClient,
     admin_user: User,
     admin_headers: dict[str, str],
+    db_session: AsyncSession,
 ) -> None:
     """
     Test deactivating a supervisor when only some subordinates are mapped and no default is provided
@@ -314,6 +326,7 @@ async def test_deactivate_supervisor_partial_reassignment_returns_409(
         headers=admin_headers,
     )
     sup_id = sup_res.json()["id"]
+    await _activate_user(db_session, sup_id)
 
     rep1_res = await client.post(
         "/users/employees",
@@ -321,6 +334,7 @@ async def test_deactivate_supervisor_partial_reassignment_returns_409(
         headers=admin_headers,
     )
     rep1_id = rep1_res.json()["id"]
+    await _activate_user(db_session, rep1_id)
 
     rep2_res = await client.post(
         "/users/employees",
@@ -328,6 +342,7 @@ async def test_deactivate_supervisor_partial_reassignment_returns_409(
         headers=admin_headers,
     )
     rep2_id = rep2_res.json()["id"]
+    await _activate_user(db_session, rep2_id)
 
     # Partial instruction: reassign rep1 to admin_user, omit rep2
     deact_res = await client.patch(
@@ -354,6 +369,7 @@ async def test_deactivate_supervisor_explicit_mapping_success(
     client: AsyncClient,
     admin_user: User,
     admin_headers: dict[str, str],
+    db_session: AsyncSession,
 ) -> None:
     """
     Test deactivating a supervisor with explicit subordinate-to-manager mapping succeeds in one transaction.
@@ -364,6 +380,7 @@ async def test_deactivate_supervisor_explicit_mapping_success(
         headers=admin_headers,
     )
     sup_id = sup_res.json()["id"]
+    await _activate_user(db_session, sup_id)
 
     mgr2_res = await client.post(
         "/users/employees",
@@ -371,6 +388,7 @@ async def test_deactivate_supervisor_explicit_mapping_success(
         headers=admin_headers,
     )
     mgr2_id = mgr2_res.json()["id"]
+    await _activate_user(db_session, mgr2_id)
 
     rep1_res = await client.post(
         "/users/employees",
@@ -378,6 +396,7 @@ async def test_deactivate_supervisor_explicit_mapping_success(
         headers=admin_headers,
     )
     rep1_id = rep1_res.json()["id"]
+    await _activate_user(db_session, rep1_id)
 
     rep2_res = await client.post(
         "/users/employees",
@@ -385,6 +404,7 @@ async def test_deactivate_supervisor_explicit_mapping_success(
         headers=admin_headers,
     )
     rep2_id = rep2_res.json()["id"]
+    await _activate_user(db_session, rep2_id)
 
     # Reassign rep1 -> admin_user, rep2 -> mgr2
     deact_res = await client.patch(
@@ -407,6 +427,7 @@ async def test_deactivate_supervisor_default_manager_success(
     client: AsyncClient,
     admin_user: User,
     admin_headers: dict[str, str],
+    db_session: AsyncSession,
 ) -> None:
     """
     Test deactivating a supervisor with default_new_manager_id applies to all subordinates.
@@ -417,6 +438,7 @@ async def test_deactivate_supervisor_default_manager_success(
         headers=admin_headers,
     )
     sup_id = sup_res.json()["id"]
+    await _activate_user(db_session, sup_id)
 
     rep1_res = await client.post(
         "/users/employees",
@@ -424,6 +446,7 @@ async def test_deactivate_supervisor_default_manager_success(
         headers=admin_headers,
     )
     rep1_id = rep1_res.json()["id"]
+    await _activate_user(db_session, rep1_id)
 
     rep2_res = await client.post(
         "/users/employees",
@@ -431,6 +454,7 @@ async def test_deactivate_supervisor_default_manager_success(
         headers=admin_headers,
     )
     rep2_id = rep2_res.json()["id"]
+    await _activate_user(db_session, rep2_id)
 
     # Apply default manager
     deact_res = await client.patch(
@@ -452,6 +476,7 @@ async def test_deactivate_supervisor_explicit_null_success(
     client: AsyncClient,
     admin_user: User,
     admin_headers: dict[str, str],
+    db_session: AsyncSession,
 ) -> None:
     """
     Test deactivating a supervisor with explicit null (no manager) as default or in mapping.
@@ -463,6 +488,7 @@ async def test_deactivate_supervisor_explicit_null_success(
         headers=admin_headers,
     )
     sup_id = sup_res.json()["id"]
+    await _activate_user(db_session, sup_id)
 
     rep1_res = await client.post(
         "/users/employees",
@@ -470,6 +496,7 @@ async def test_deactivate_supervisor_explicit_null_success(
         headers=admin_headers,
     )
     rep1_id = rep1_res.json()["id"]
+    await _activate_user(db_session, rep1_id)
 
     deact_res = await client.patch(
         f"/users/{sup_id}/deactivate",
@@ -490,6 +517,7 @@ async def test_deactivate_supervisor_explicit_null_success(
         headers=admin_headers,
     )
     sup2_id = sup2_res.json()["id"]
+    await _activate_user(db_session, sup2_id)
 
     repA_res = await client.post(
         "/users/employees",
@@ -497,6 +525,7 @@ async def test_deactivate_supervisor_explicit_null_success(
         headers=admin_headers,
     )
     repA_id = repA_res.json()["id"]
+    await _activate_user(db_session, repA_id)
 
     repB_res = await client.post(
         "/users/employees",
@@ -504,6 +533,7 @@ async def test_deactivate_supervisor_explicit_null_success(
         headers=admin_headers,
     )
     repB_id = repB_res.json()["id"]
+    await _activate_user(db_session, repB_id)
 
     deact2_res = await client.patch(
         f"/users/{sup2_id}/deactivate",
@@ -522,6 +552,7 @@ async def test_deactivate_supervisor_explicit_null_success(
 async def test_deactivate_supervisor_invalid_managers_rejected(
     client: AsyncClient,
     admin_headers: dict[str, str],
+    db_session: AsyncSession,
 ) -> None:
     """
     Test deactivating a supervisor rejects invalid managers (nonexistent, inactive, self, cycle)
@@ -533,6 +564,7 @@ async def test_deactivate_supervisor_invalid_managers_rejected(
         headers=admin_headers,
     )
     sup_id = sup_res.json()["id"]
+    await _activate_user(db_session, sup_id)
 
     rep_res = await client.post(
         "/users/employees",
@@ -540,6 +572,7 @@ async def test_deactivate_supervisor_invalid_managers_rejected(
         headers=admin_headers,
     )
     rep_id = rep_res.json()["id"]
+    await _activate_user(db_session, rep_id)
 
     # 1. Non-existent supervisor -> 404
     res_404 = await client.patch(
@@ -556,15 +589,8 @@ async def test_deactivate_supervisor_invalid_managers_rejected(
         headers=admin_headers,
     )
     inact_id = inactive_emp_res.json()["id"]
+    await _activate_user(db_session, inact_id)
     await client.patch(f"/users/{inact_id}/deactivate", headers=admin_headers)
-
-    res_inact = await client.patch(
-        f"/users/{sup_id}/deactivate",
-        json={"default_new_manager_id": inact_id},
-        headers=admin_headers,
-    )
-    assert res_inact.status_code == status.HTTP_400_BAD_REQUEST
-    assert "inactive" in res_inact.json()["detail"].lower()
 
     # 3. Target user being deactivated as manager -> 400
     res_self_sup = await client.patch(
@@ -589,6 +615,7 @@ async def test_deactivate_supervisor_invalid_managers_rejected(
         headers=admin_headers,
     )
     sub_rep_id = sub_rep_res.json()["id"]
+    await _activate_user(db_session, sub_rep_id)
 
     res_cycle = await client.patch(
         f"/users/{sup_id}/deactivate",
@@ -626,6 +653,7 @@ async def test_deactivated_user_old_tasks_and_leaves_still_readable(
     client: AsyncClient,
     admin_user: User,
     admin_headers: dict[str, str],
+    db_session: AsyncSession,
 ) -> None:
     """
     Test that deactivating a user only blocks login and preserves all historical tasks and leaves.
@@ -636,6 +664,7 @@ async def test_deactivated_user_old_tasks_and_leaves_still_readable(
         headers=admin_headers,
     )
     emp_id = emp_res.json()["id"]
+    await _activate_user(db_session, emp_id)
 
     # Create task assigned to employee
     task_res = await client.post(

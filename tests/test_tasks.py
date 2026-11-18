@@ -696,6 +696,11 @@ async def test_deactivate_user_does_not_soft_delete_tasks(
     assert emp_res.status_code == status.HTTP_201_CREATED
     emp_id = emp_res.json()["id"]
 
+    # Activate employee so tasks can be assigned (Slice 4e pending users cannot be assigned tasks)
+    emp_db = await db_session.get(User, emp_id)
+    emp_db.invitation_status = "ACTIVE"
+    await db_session.commit()
+
     # Assign task to this employee
     task_res = await client.post(
         "/tasks/",

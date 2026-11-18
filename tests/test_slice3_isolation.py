@@ -89,15 +89,15 @@ async def test_cross_org_review_leave_returns_404(
 
 
 @pytest.mark.asyncio
-async def test_cross_org_reset_temp_password_returns_404(
+async def test_cross_org_send_password_reset_returns_404(
     client: AsyncClient,
     admin_headers: dict,
     employee_user_b: User,
 ):
     """
-    Test: POST /users/{user_id}/reset-temp-password returns 404 for Admin A when targeting Org B's employee.
+    Test: POST /users/{user_id}/send-password-reset returns 404 for Admin A when targeting Org B's employee.
     """
-    res = await client.post(f"/users/{employee_user_b.id}/reset-temp-password", headers=admin_headers)
+    res = await client.post(f"/users/{employee_user_b.id}/send-password-reset", headers=admin_headers)
     assert res.status_code == 404
     assert res.json()["detail"] == "User not found."
 
