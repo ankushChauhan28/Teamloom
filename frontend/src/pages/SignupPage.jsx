@@ -98,13 +98,23 @@ export function SignupPage() {
           'Signup successful. Please check your email to verify your account.'
       );
     } catch (err) {
-      if (err.response?.status === 429) {
-        setServerError(
-          err.response?.data?.detail ||
-            'Too many signup attempts. Please try again later.'
-        );
-      } else if (err.response?.status === 422) {
-        const detail = err.response?.data?.detail;
+      if (!err.response) {
+        setServerError('Cannot reach the server. Check your connection or try again shortly.');
+      } else if (err.response.status === 429) {
+        const retryAfter = err.response.headers?.['retry-after'];
+        const seconds = parseInt(retryAfter, 10);
+        if (!isNaN(seconds) && seconds > 0) {
+          const minutes = Math.max(1, Math.ceil(seconds / 60));
+          const unit = minutes === 1 ? 'minute' : 'minutes';
+          setServerError(`Too many signup attempts. Please try again in about ${minutes} ${unit}.`);
+        } else {
+          setServerError(
+            err.response.data?.detail ||
+              'Too many signup attempts. Please try again later.'
+          );
+        }
+      } else if (err.response.status === 422) {
+        const detail = err.response.data?.detail;
         if (Array.isArray(detail)) {
           const fieldErrors = {};
           detail.forEach((item) => {
@@ -121,8 +131,10 @@ export function SignupPage() {
         } else {
           setServerError('Validation failed. Please check your inputs.');
         }
-      } else {
+      } else if (err.response.status >= 500) {
         setServerError('Server error. Please try again.');
+      } else {
+        setServerError(err.response.data?.detail || 'Server error. Please try again.');
       }
     } finally {
       setIsSubmitting(false);
@@ -146,17 +158,35 @@ export function SignupPage() {
           'If an unverified account exists for this email, a verification link has been sent.',
       });
     } catch (err) {
-      if (err.response?.status === 429) {
+      if (!err.response) {
         setResendAlert({
           variant: 'danger',
-          message:
-            err.response?.data?.detail ||
-            'Too many verification requests. Please try again later.',
+          message: 'Cannot reach the server. Check your connection or try again shortly.',
+        });
+      } else if (err.response.status === 429) {
+        const retryAfter = err.response.headers?.['retry-after'];
+        const seconds = parseInt(retryAfter, 10);
+        let msg =
+          err.response.data?.detail ||
+          'Too many verification requests. Please try again later.';
+        if (!isNaN(seconds) && seconds > 0) {
+          const minutes = Math.max(1, Math.ceil(seconds / 60));
+          const unit = minutes === 1 ? 'minute' : 'minutes';
+          msg = `Too many verification requests. Please try again in about ${minutes} ${unit}.`;
+        }
+        setResendAlert({
+          variant: 'danger',
+          message: msg,
+        });
+      } else if (err.response.status >= 500) {
+        setResendAlert({
+          variant: 'danger',
+          message: 'Server error. Please try again.',
         });
       } else {
         setResendAlert({
           variant: 'danger',
-          message: 'Server error. Please try again.',
+          message: err.response.data?.detail || 'Server error. Please try again.',
         });
       }
     } finally {
