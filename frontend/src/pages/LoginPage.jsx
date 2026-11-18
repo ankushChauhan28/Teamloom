@@ -81,17 +81,29 @@ export function LoginPage() {
         navigate(targetPath, { replace: true });
       }
     } catch (err) {
-      if (err.response?.status === 401) {
+      if (!err.response) {
+        setServerError('Cannot reach the server. Check your connection or try again shortly.');
+      } else if (err.response.status === 401) {
         setServerError('Incorrect credentials.');
         if (mode === 'admin') {
           setShowAdminResendHelper(true);
         }
-      } else if (err.response?.status === 429) {
-        setServerError(
-          err.response?.data?.detail || 'Too many login attempts. Please try again later.'
-        );
-      } else {
+      } else if (err.response.status === 429) {
+        const retryAfter = err.response.headers?.['retry-after'];
+        const seconds = parseInt(retryAfter, 10);
+        if (!isNaN(seconds) && seconds > 0) {
+          const minutes = Math.max(1, Math.ceil(seconds / 60));
+          const unit = minutes === 1 ? 'minute' : 'minutes';
+          setServerError(`Too many login attempts. Please try again in about ${minutes} ${unit}.`);
+        } else {
+          setServerError(
+            err.response.data?.detail || 'Too many login attempts. Please try again later.'
+          );
+        }
+      } else if (err.response.status >= 500) {
         setServerError('Server error. Please try again.');
+      } else {
+        setServerError(err.response.data?.detail || 'Server error. Please try again.');
       }
     } finally {
       setIsSubmitting(false);
@@ -120,17 +132,35 @@ export function LoginPage() {
           'If an unverified account exists for this email, a verification link has been sent.',
       });
     } catch (err) {
-      if (err.response?.status === 429) {
+      if (!err.response) {
         setResendAlert({
           variant: 'danger',
-          message:
-            err.response?.data?.detail ||
-            'Too many verification requests. Please try again later.',
+          message: 'Cannot reach the server. Check your connection or try again shortly.',
+        });
+      } else if (err.response.status === 429) {
+        const retryAfter = err.response.headers?.['retry-after'];
+        const seconds = parseInt(retryAfter, 10);
+        let msg =
+          err.response.data?.detail ||
+          'Too many verification requests. Please try again later.';
+        if (!isNaN(seconds) && seconds > 0) {
+          const minutes = Math.max(1, Math.ceil(seconds / 60));
+          const unit = minutes === 1 ? 'minute' : 'minutes';
+          msg = `Too many verification requests. Please try again in about ${minutes} ${unit}.`;
+        }
+        setResendAlert({
+          variant: 'danger',
+          message: msg,
+        });
+      } else if (err.response.status >= 500) {
+        setResendAlert({
+          variant: 'danger',
+          message: 'Server error. Please try again.',
         });
       } else {
         setResendAlert({
           variant: 'danger',
-          message: 'Server error. Please try again.',
+          message: err.response.data?.detail || 'Server error. Please try again.',
         });
       }
     } finally {

@@ -42,9 +42,27 @@ export function VerifyEmailPage() {
         setMessage(res.data?.message || 'Email successfully verified.');
       } catch (err) {
         setStatus('error');
-        setMessage(
-          err.response?.data?.detail || 'Invalid or expired verification token.'
-        );
+        if (!err.response) {
+          setMessage('Cannot reach the server. Check your connection or try again shortly.');
+        } else if (err.response.status === 429) {
+          const retryAfter = err.response.headers?.['retry-after'];
+          const seconds = parseInt(retryAfter, 10);
+          if (!isNaN(seconds) && seconds > 0) {
+            const minutes = Math.max(1, Math.ceil(seconds / 60));
+            const unit = minutes === 1 ? 'minute' : 'minutes';
+            setMessage(`Too many attempts. Please try again in about ${minutes} ${unit}.`);
+          } else {
+            setMessage(
+              err.response.data?.detail || 'Too many attempts. Please try again later.'
+            );
+          }
+        } else if (err.response.status >= 500) {
+          setMessage('Server error. Please try again.');
+        } else {
+          setMessage(
+            err.response.data?.detail || 'Invalid or expired verification token.'
+          );
+        }
       }
     };
 
@@ -73,17 +91,35 @@ export function VerifyEmailPage() {
           'If an unverified account exists for this email, a verification link has been sent.',
       });
     } catch (err) {
-      if (err.response?.status === 429) {
+      if (!err.response) {
         setResendAlert({
           variant: 'danger',
-          message:
-            err.response?.data?.detail ||
-            'Too many verification requests. Please try again later.',
+          message: 'Cannot reach the server. Check your connection or try again shortly.',
+        });
+      } else if (err.response.status === 429) {
+        const retryAfter = err.response.headers?.['retry-after'];
+        const seconds = parseInt(retryAfter, 10);
+        let msg =
+          err.response.data?.detail ||
+          'Too many verification requests. Please try again later.';
+        if (!isNaN(seconds) && seconds > 0) {
+          const minutes = Math.max(1, Math.ceil(seconds / 60));
+          const unit = minutes === 1 ? 'minute' : 'minutes';
+          msg = `Too many verification requests. Please try again in about ${minutes} ${unit}.`;
+        }
+        setResendAlert({
+          variant: 'danger',
+          message: msg,
+        });
+      } else if (err.response.status >= 500) {
+        setResendAlert({
+          variant: 'danger',
+          message: 'Server error. Please try again.',
         });
       } else {
         setResendAlert({
           variant: 'danger',
-          message: 'Server error. Please try again.',
+          message: err.response.data?.detail || 'Server error. Please try again.',
         });
       }
     } finally {

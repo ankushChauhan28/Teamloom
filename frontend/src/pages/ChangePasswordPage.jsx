@@ -73,10 +73,32 @@ export function ChangePasswordPage() {
         navigate(targetPath, { replace: true });
       }, 1200);
     } catch (err) {
-      const msg =
-        err.response?.data?.detail ||
-        'Failed to update password. Please check your current password.';
-      setServerError(msg);
+      if (!err.response) {
+        setServerError('Cannot reach the server. Check your connection or try again shortly.');
+      } else if (err.response.status === 401) {
+        setServerError(
+          err.response.data?.detail || 'Incorrect current password.'
+        );
+      } else if (err.response.status === 429) {
+        const retryAfter = err.response.headers?.['retry-after'];
+        const seconds = parseInt(retryAfter, 10);
+        if (!isNaN(seconds) && seconds > 0) {
+          const minutes = Math.max(1, Math.ceil(seconds / 60));
+          const unit = minutes === 1 ? 'minute' : 'minutes';
+          setServerError(`Too many attempts. Please try again in about ${minutes} ${unit}.`);
+        } else {
+          setServerError(
+            err.response.data?.detail || 'Too many attempts. Please try again later.'
+          );
+        }
+      } else if (err.response.status >= 500) {
+        setServerError('Server error. Please try again.');
+      } else {
+        const msg =
+          err.response.data?.detail ||
+          'Failed to update password. Please check your current password.';
+        setServerError(msg);
+      }
       setIsSubmitting(false);
     }
   };
