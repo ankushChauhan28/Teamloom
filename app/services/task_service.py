@@ -37,6 +37,9 @@ async def create_task(db: AsyncSession, task_in: TaskCreate, creator: User) -> T
     if is_assignee_admin:
         raise BadRequestException("Tasks can only be assigned to users with the EMPLOYEE role.")
 
+    if assignee.invitation_status != "ACTIVE":
+        raise BadRequestException("Cannot assign tasks to a pending or revoked user.")
+
     is_admin = getattr(creator, "access_level", None) == 1 or creator.role == UserRole.ADMIN
     has_assignment_authority = can_manage_specific_user(creator, assignee)
 
@@ -262,6 +265,17 @@ async def update_task(
         invalid_keys = [k for k in update_data.keys() if k != "status"]
         if invalid_keys:
             raise AuthorizationException("Employees are only permitted to update the task status.")
+
+    if "assigned_to" in update_data and update_data["assigned_to"] is not None:
+        new_assignee = await get_scoped_or_404(
+            db=db,
+            model=User,
+            id_val=update_data["assigned_to"],
+            organization_id=user.organization_id,
+            error_msg=f"Assigned user with ID {update_data['assigned_to']} not found.",
+        )
+        if new_assignee.invitation_status != "ACTIVE":
+            raise BadRequestException("Cannot assign tasks to a pending or revoked user.")
 
     # Prevent modifications on already COMPLETED tasks
     if (db_task.status == "COMPLETED" or db_task.status == TaskStatus.COMPLETED) and "status" in update_data:

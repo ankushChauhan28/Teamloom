@@ -19,6 +19,7 @@ from app.core.security import (
     decode_access_token,
     decode_refresh_token,
     hash_password,
+    validate_password_strength,
     verify_password,
 )
 from app.models.email_verification_token import EmailVerificationToken
@@ -26,6 +27,7 @@ from app.models.organization import Organization, OrgStatus
 from app.models.revoked_token import RevokedToken
 from app.models.user import User, UserRole
 from app.schemas.user import PasswordChange, SignupRequest, UserLogin
+from app.services import token_service
 
 # Pre-computed dummy hash to guarantee constant-time bcrypt execution for non-existent users
 DUMMY_HASH = hash_password("dummy_password_for_constant_time_verification")
@@ -232,6 +234,12 @@ async def authenticate_user(db: AsyncSession, login_in: UserLogin) -> User:
         await db.commit()
         raise generic_error
 
+    # 1c. PENDING or REVOKED invite status: run dummy bcrypt & commit to match timing and DB I/O profile, return generic error
+    if user.invitation_status in ("PENDING", "REVOKED"):
+        verify_password(login_in.password, DUMMY_HASH)
+        await db.commit()
+        raise generic_error
+
     # 1c. Unverified Admin user: run dummy bcrypt & commit to match timing and DB I/O profile, return generic error
     if login_in.mode == "admin" and not user.is_email_verified:
         verify_password(login_in.password, user.hashed_password)
@@ -273,13 +281,108 @@ async def authenticate_user(db: AsyncSession, login_in: UserLogin) -> User:
 async def change_password(db: AsyncSession, user: User, pwd_in: PasswordChange) -> User:
     """
     Validates current password, updates user's password to new_password,
-    and clears must_change_password flag to False.
+    clears must_change_password flag to False, and sets tokens_valid_after to now.
     """
     if not verify_password(pwd_in.current_password, user.hashed_password):
         raise InvalidCredentialsException("Current password is incorrect.")
 
+    validate_password_strength(pwd_in.new_password)
     user.hashed_password = hash_password(pwd_in.new_password)
     user.must_change_password = False
+    user.tokens_valid_after = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def accept_invite(db: AsyncSession, token: str, password: str) -> User:
+    """
+    Accepts an employee invitation (POST /auth/accept-invite).
+    1. Validates password strength (reusing existing validation rules).
+    2. Atomically consumes the single-use INVITE token (raises 400 generic error on invalid/expired/used).
+    3. Verifies target user is active and in PENDING invitation_status.
+    4. Hashes the new password, activates user (invitation_status='ACTIVE', invitation_accepted_at=now),
+       marks is_email_verified=True and email_verified_at=now, clears must_change_password.
+    5. Sets tokens_valid_after=now to invalidate any pre-existing sessions.
+    6. Commits and returns the user.
+    """
+    validate_password_strength(password)
+    token_record = await token_service.consume_token(db=db, raw_token=token, token_type="INVITE")
+
+    user_stmt = select(User).where(User.id == token_record.user_id)
+    user = (await db.execute(user_stmt)).scalar_one_or_none()
+
+    if not user or not user.is_active or user.invitation_status != "PENDING":
+        raise BadRequestException("Invalid or expired token.")
+
+    now = datetime.now(UTC)
+    user.hashed_password = hash_password(password)
+    user.invitation_status = "ACTIVE"
+    user.invitation_accepted_at = now
+    user.is_email_verified = True
+    user.email_verified_at = now
+    user.must_change_password = False
+    user.tokens_valid_after = now
+
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def forgot_password(
+    db: AsyncSession, email: str
+) -> tuple[bool, str | None, str | None, str | None]:
+    """
+    Initiates self-serve password reset (POST /auth/forgot-password).
+    Anti-enumeration: returns identical success response and timing for existing,
+    non-existing, pending, revoked, and deactivated emails.
+    Email is only dispatched for ACTIVE, active users.
+    """
+    norm_email = email.strip().lower()
+    stmt = select(User).where(func.lower(User.email) == norm_email)
+    user = (await db.execute(stmt)).scalar_one_or_none()
+
+    # Always run dummy bcrypt to equalize timing with authenticate_user
+    verify_password("dummy_password", DUMMY_HASH)
+
+    if not user or not user.is_active or user.invitation_status != "ACTIVE":
+        await db.commit()
+        return True, None, None, None
+
+    raw_token = await token_service.generate_user_token(
+        db=db,
+        user_id=user.id,
+        token_type="PASSWORD_RESET",
+        expire_hours=settings.PASSWORD_RESET_TOKEN_EXPIRE_HOURS,
+    )
+    await db.commit()
+    return True, norm_email, user.full_name, raw_token
+
+
+async def reset_password(db: AsyncSession, token: str, new_password: str) -> User:
+    """
+    Resets user password using single-use PASSWORD_RESET token (POST /auth/reset-password).
+    1. Validates password strength.
+    2. Atomically consumes single-use PASSWORD_RESET token.
+    3. Verifies target user is active and in ACTIVE invitation_status.
+    4. Hashes new password, clears must_change_password.
+    5. Sets tokens_valid_after=now to invalidate all active sessions.
+    6. Commits and returns the user.
+    """
+    validate_password_strength(new_password)
+    token_record = await token_service.consume_token(db=db, raw_token=token, token_type="PASSWORD_RESET")
+
+    user_stmt = select(User).where(User.id == token_record.user_id)
+    user = (await db.execute(user_stmt)).scalar_one_or_none()
+
+    if not user or not user.is_active or user.invitation_status != "ACTIVE":
+        raise BadRequestException("Invalid or expired token.")
+
+    now = datetime.now(UTC)
+    user.hashed_password = hash_password(new_password)
+    user.must_change_password = False
+    user.tokens_valid_after = now
+
     await db.commit()
     await db.refresh(user)
     return user
@@ -357,6 +460,18 @@ async def refresh_access_token(db: AsyncSession, refresh_token: str) -> tuple[st
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise AuthenticationException("User not found.")
+
+    if user.tokens_valid_after is not None:
+        token_iat = payload.get("iat")
+        if token_iat is not None:
+            iat_dt = datetime.fromtimestamp(token_iat, tz=UTC)
+            user_valid_after = (
+                user.tokens_valid_after
+                if user.tokens_valid_after.tzinfo is not None
+                else user.tokens_valid_after.replace(tzinfo=UTC)
+            )
+            if iat_dt < user_valid_after:
+                raise AuthenticationException("Refresh token has been revoked.")
 
     new_access_token = create_access_token(email=user.email, role=user.role.value)
     new_refresh_token = create_refresh_token(email=user.email, role=user.role.value)
