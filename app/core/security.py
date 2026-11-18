@@ -10,10 +10,33 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.exceptions import AuthenticationException, AuthorizationException
+from app.core.exceptions import AuthenticationException, AuthorizationException, BadRequestException
 from app.db.session import get_db
 from app.models.revoked_token import RevokedToken
 from app.models.user import User
+
+
+def validate_password_strength(password: str) -> None:
+    """
+    Validates password strength:
+    - Minimum 8 characters
+    - At least one uppercase letter
+    - At least one lowercase letter
+    - At least one digit
+    - At least one special character
+    Raises BadRequestException if validation fails.
+    """
+    if len(password) < 8:
+        raise BadRequestException("Password must be at least 8 characters long.")
+    if not any(c.isupper() for c in password):
+        raise BadRequestException("Password must contain at least one uppercase letter.")
+    if not any(c.islower() for c in password):
+        raise BadRequestException("Password must contain at least one lowercase letter.")
+    if not any(c.isdigit() for c in password):
+        raise BadRequestException("Password must contain at least one number.")
+    special_characters = "!@#$%^&*()_+-=[]{}|;':\",./<>?`~\\"
+    if not any(c in special_characters for c in password):
+        raise BadRequestException("Password must contain at least one special character.")
 
 
 def hash_password(password: str) -> str:
@@ -146,6 +169,18 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
         raise AuthenticationException("User not found.")
+
+    if user.tokens_valid_after is not None:
+        token_iat = payload.get("iat")
+        if token_iat is not None:
+            iat_dt = datetime.fromtimestamp(token_iat, tz=UTC)
+            user_valid_after = (
+                user.tokens_valid_after
+                if user.tokens_valid_after.tzinfo is not None
+                else user.tokens_valid_after.replace(tzinfo=UTC)
+            )
+            if iat_dt < user_valid_after:
+                raise AuthenticationException("Token has been revoked.")
 
     return user
 
