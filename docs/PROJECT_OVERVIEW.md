@@ -374,12 +374,12 @@ A representative user action (e.g., an Administrator creating a new employee tas
 | **Optimistic Task Locking** | `app/services/task_service.py`<br>`frontend/src/components/TaskFormModal.jsx` | **Complete and working** | `version` column checked on update. HTTP 409 Conflict triggers client reload dialog preventing silent overwrites. |
 | **Leave Request & Review** | `app/routes/leaves.py`<br>`frontend/src/pages/AdminLeavesPage.jsx` | **Complete and working** | Employee submission with date overlap prevention. Tier 1 Admin only approval/rejection. Supervisors have view-only team access. |
 | **Performance Analytics** | `app/services/analytics_service.py`<br>`frontend/src/pages/MyPerformancePage.jsx` | **Complete and working** | Server-side SQL conditional aggregations for on-time rate, classified counts, and milestone trails. Scoped by `self`, `team`, `org`, `employee`. |
-| **Multi-Tenant Data Isolation** | `app/services/common.py`<br>`tests/test_slice3_isolation.py` | **Complete and working** | All queries filter by `organization_id`. Cross-tenant lookups by ID return 404 anti-enumeration (X4). |
+| **Multi-Tenant Data Isolation** | `app/services/common.py`<br>`tests/test_tenant_isolation.py` | **Complete and working** | All queries filter by `organization_id`. Cross-tenant lookups by ID return 404 anti-enumeration (X4). 100-test blackbox isolation verification suite. |
 | **Background Cleanup Jobs** | `app/core/scheduler.py` | **Complete and working** | APScheduler runs every 24h: deletes expired revoked tokens and deletes unverified signups older than 7 days. |
-| **Employee Invite Flow (Slice 4e)** | Not yet created | **Stubbed / Pending** | Tracked in `TEAMLOOM_SAAS_REQUIREMENTS.md` as Slice 4e. Intended to replace temporary passwords with set-password invite links. |
+| **Employee Invite Flow (Slice 4e)** | `app/routes/users.py`<br>`app/routes/auth.py`<br>`app/services/token_service.py` | **Backend Complete (PR 1)** | Replaced temporary passwords with 48h single-use set-password invite links, self-serve password resets, and session invalidation via `tokens_valid_after`. Frontend UI pending in PR 2. |
 | **Subscription & Billing (Slices 6-9)** | Not yet created | **Stubbed / Pending** | Tracked in `TEAMLOOM_SAAS_REQUIREMENTS.md`. Razorpay checkout, pack selection, seat limits, and webhook listeners not yet written. |
 | **Server-Side Pagination Controls** | `frontend/src/pages/AdminTasksPage.jsx`<br>`AdminLeavesPage.jsx` | **Partially implemented** | Backend supports `skip` and `limit` with `X-Total-Count` header, but frontend pages hardcode `limit=100` without page pagination UI. |
-| **Admin Reset Password UI** | `app/routes/users.py:178` | **Partially implemented** | `POST /users/{id}/reset-temp-password` exists and works on backend, but has no button in `AdminEmployeesPage.jsx`. |
+| **Admin Reset Password Flow** | `app/routes/users.py` | **Backend Complete (PR 1)** | `POST /users/{id}/send-password-reset` dispatches 1h reset link. Legacy `reset-temp-password` permanently removed. AdminEmployeesPage button pending in PR 2. |
 | **Legacy QA CLI Scripts** | `scripts/test_endpoints.py` | **Broken** | Line 52 calls `POST /auth/register` which was removed in Slice 4a/4c (replaced by `/auth/signup`). Fails with 404/405. |
 
 ---
@@ -400,14 +400,19 @@ A representative user action (e.g., an Administrator creating a new employee tas
 | `POST` | `/auth/swagger-login` | No | Public (Form data) | OAuth2 password request form for Swagger UI |
 | `POST` | `/auth/refresh` | No | Public (Cookie required) | Silent token refresh exchanging refresh cookie for access token |
 | `POST` | `/auth/logout` | Yes | Authenticated | Dual-token revocation and refresh cookie deletion |
-| `POST` | `/auth/change-password` | Yes | Authenticated (must_change_password permitted) | Updates password and clears must_change_password flag |
+| `POST` | `/auth/change-password` | Yes | Authenticated (must_change_password permitted) | Updates password, clears must_change_password flag, invalidates older sessions |
+| `POST` | `/auth/accept-invite` | No | Public (Rate limited) | Accept invitation using 48h single-use token and set chosen password |
+| `POST` | `/auth/forgot-password` | No | Public (Rate limited) | Request 1h password reset token with anti-enumeration |
+| `POST` | `/auth/reset-password` | No | Public (Rate limited) | Reset password using 1h single-use token and revoke all existing sessions |
 | `GET` | `/users/me` | Yes | Password change cleared | Current user profile with direct report IDs |
 | `PATCH` | `/users/me` | Yes | Password change cleared | Update profile details (full_name, designation) |
 | `GET` | `/users/me/reports` | Yes | Password change cleared | List direct report employees managed by current user |
 | `GET` | `/users/{user_id}/direct-reports`| Yes | Tier 1 Admin or supervisor user | List direct reports for a specific supervisor ID |
 | `GET` | `/users/` | Yes | Tier 1 Admin only | List all employees in the admin's organization |
-| `POST` | `/users/employees` | Yes | Tier 1 Admin only | Provision new employee account with 10-digit ID |
-| `POST` | `/users/{user_id}/reset-temp-password`| Yes | Tier 1 Admin only | Reset employee temp password and email credentials |
+| `POST` | `/users/employees` | Yes | Tier 1 Admin only (Rate limited) | Invite employee account in PENDING status; queues 48h invite email |
+| `POST` | `/users/{user_id}/resend-invite` | Yes | Tier 1 Admin only (Rate limited) | Resend 48h invite email to PENDING employee, invalidating previous tokens |
+| `POST` | `/users/{user_id}/revoke-invite` | Yes | Tier 1 Admin only | Revoke pending invitation (status=REVOKED, is_active=False) |
+| `POST` | `/users/{user_id}/send-password-reset` | Yes | Tier 1 Admin only (Rate limited) | Send 1h password reset link to ACTIVE employee |
 | `PATCH` | `/users/{user_id}/reports-to` | Yes | Tier 1 Admin only | Set or change an employee's supervisor |
 | `PATCH` | `/users/{user_id}/deactivate` | Yes | Tier 1 Admin only | Soft deactivation (`is_active=False`) |
 | `PATCH` | `/users/{user_id}/reactivate` | Yes | Tier 1 Admin only | Reactivate employee account (`is_active=True`) |
@@ -497,6 +502,18 @@ A recursive search across all source directories (`app/`, `frontend/src/`, `test
 | `RATE_LIMIT_IP_CEILING_ATTEMPTS` | Looser per-IP ceiling across all identifiers against spraying | Optional (default: `100`) | `app/core/config.py`, `app/core/rate_limit.py` |
 | `RATE_LIMIT_IP_CEILING_WINDOW_SECONDS` | Sliding window in seconds for per-IP ceiling | Optional (default: `900` = 15m) | `app/core/config.py`, `app/core/rate_limit.py` |
 | `EMAIL_BACKEND` | Switch between `auto`, `smtp`, and `console` email senders | Optional (default: `auto`) | `app/core/config.py`, `app/core/email.py` |
+| `INVITE_TOKEN_EXPIRE_HOURS` | Expiration time for employee invitation links | Optional (default: `48`) | `app/core/config.py`, `app/services/token_service.py` |
+| `PASSWORD_RESET_TOKEN_EXPIRE_MINUTES` | Expiration time for password reset links | Optional (default: `60`) | `app/core/config.py`, `app/services/token_service.py` |
+| `INVITE_ACCEPT_URL` | Base frontend URL for employee invite acceptance | Optional (falls back to `{FRONTEND_URL}/accept-invite`) | `app/core/config.py`, `app/core/email.py` |
+| `PASSWORD_RESET_URL` | Base frontend URL for password reset links | Optional (falls back to `{FRONTEND_URL}/reset-password`) | `app/core/config.py`, `app/core/email.py` |
+| `INVITE_RATE_LIMIT_PER_ADMIN` | Maximum employee invites an admin can dispatch per window | Optional (default: `20`) | `app/core/config.py`, `app/routes/users.py` |
+| `INVITE_RATE_LIMIT_WINDOW_SECONDS` | Sliding window in seconds for admin invite limit | Optional (default: `3600` = 1h) | `app/core/config.py`, `app/routes/users.py` |
+| `PASSWORD_RESET_RATE_LIMIT_PER_ADMIN` | Maximum password reset emails an admin can trigger per window | Optional (default: `10`) | `app/core/config.py`, `app/routes/users.py` |
+| `PASSWORD_RESET_RATE_LIMIT_WINDOW_SECONDS` | Sliding window in seconds for admin reset limit | Optional (default: `3600` = 1h) | `app/core/config.py`, `app/routes/users.py` |
+| `FORGOT_PASSWORD_RATE_LIMIT_COMPOUND_ATTEMPTS` | Sliding window attempts for public forgot-password compound key | Optional (default: `5`) | `app/core/config.py`, `app/routes/auth.py` |
+| `FORGOT_PASSWORD_RATE_LIMIT_IP_CEILING_ATTEMPTS` | Per-IP ceiling across all emails for forgot-password | Optional (default: `30`) | `app/core/config.py`, `app/routes/auth.py` |
+| `ACCEPT_INVITE_RATE_LIMIT_ATTEMPTS` | Sliding window attempts per IP for accept-invite endpoint | Optional (default: `10`) | `app/core/config.py`, `app/routes/auth.py` |
+| `RESET_PASSWORD_RATE_LIMIT_ATTEMPTS` | Sliding window attempts per IP for reset-password endpoint | Optional (default: `10`) | `app/core/config.py`, `app/routes/auth.py` |
 | `EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS`| Expiration time for email verification tokens | Optional (default: `24`) | `app/core/config.py`, `app/services/auth_service.py` |
 | `EMAIL_VERIFICATION_URL`| Base URL for verification link | Optional (falls back to `{FRONTEND_URL}/verify-email`) | `app/core/config.py`, `app/core/email.py` |
 | `SMTP_HOST` | Outgoing SMTP mail server hostname | Optional (e.g. `smtp.gmail.com`) | `app/core/config.py`, `app/core/email.py` |
