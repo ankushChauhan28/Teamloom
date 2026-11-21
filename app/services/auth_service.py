@@ -289,7 +289,7 @@ async def change_password(db: AsyncSession, user: User, pwd_in: PasswordChange) 
     validate_password_strength(pwd_in.new_password)
     user.hashed_password = hash_password(pwd_in.new_password)
     user.must_change_password = False
-    user.tokens_valid_after = datetime.now(UTC)
+    user.tokens_valid_after = datetime.now(UTC).replace(microsecond=0)
     await db.commit()
     await db.refresh(user)
     return user
@@ -322,7 +322,7 @@ async def accept_invite(db: AsyncSession, token: str, password: str) -> User:
     user.is_email_verified = True
     user.email_verified_at = now
     user.must_change_password = False
-    user.tokens_valid_after = now
+    user.tokens_valid_after = now.replace(microsecond=0)
 
     await db.commit()
     await db.refresh(user)
@@ -381,7 +381,7 @@ async def reset_password(db: AsyncSession, token: str, new_password: str) -> Use
     now = datetime.now(UTC)
     user.hashed_password = hash_password(new_password)
     user.must_change_password = False
-    user.tokens_valid_after = now
+    user.tokens_valid_after = now.replace(microsecond=0)
 
     await db.commit()
     await db.refresh(user)
@@ -469,7 +469,7 @@ async def refresh_access_token(db: AsyncSession, refresh_token: str) -> tuple[st
                 user.tokens_valid_after
                 if user.tokens_valid_after.tzinfo is not None
                 else user.tokens_valid_after.replace(tzinfo=UTC)
-            )
+            ).replace(microsecond=0)
             if iat_dt < user_valid_after:
                 raise AuthenticationException("Refresh token has been revoked.")
 

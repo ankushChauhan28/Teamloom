@@ -178,7 +178,7 @@ async def get_current_user(
                 user.tokens_valid_after
                 if user.tokens_valid_after.tzinfo is not None
                 else user.tokens_valid_after.replace(tzinfo=UTC)
-            )
+            ).replace(microsecond=0)
             if iat_dt < user_valid_after:
                 raise AuthenticationException("Token has been revoked.")
 
