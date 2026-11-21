@@ -21,6 +21,7 @@ from app.models.email_verification_token import EmailVerificationToken  # noqa: 
 from app.models.organization import Organization  # noqa: F401
 from app.models.revoked_token import RevokedToken  # noqa: F401
 from app.models.user import User  # noqa: F401
+from app.models.user_token import UserToken  # noqa: F401
 
 
 config = context.config

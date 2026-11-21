@@ -368,6 +368,10 @@ async def test_unit_set_user_reports_to_longer_cycle_raises(db_session: AsyncSes
         db=db_session,
         employee_in=EmployeeCreate(email="c@example.com", full_name="User C"),
     )
+    emp_a.invitation_status = "ACTIVE"
+    emp_b.invitation_status = "ACTIVE"
+    emp_c.invitation_status = "ACTIVE"
+    await db_session.commit()
     user_a, user_b, user_c = emp_a, emp_b, emp_c
 
     # A reports to B
@@ -642,15 +646,15 @@ async def test_unit_user_service_additional_coverage(
     """
     Unit Test: Additional coverage for user_service functions.
     """
-    # 1. reset_employee_temp_password success & nonexistent
-    updated_emp, email_sent = await user_service.reset_employee_temp_password(
+    # 1. send_password_reset_to_employee success & nonexistent
+    updated_emp, raw_token = await user_service.send_password_reset_to_employee(
         db=db_session, target_user_id=employee_user.id
     )
-    assert updated_emp.must_change_password is True
+    assert raw_token is not None
     assert updated_emp.id == employee_user.id
 
     with pytest.raises(ResourceNotFoundException) as exc_info:
-        await user_service.reset_employee_temp_password(db=db_session, target_user_id=99999)
+        await user_service.send_password_reset_to_employee(db=db_session, target_user_id=99999)
     assert "not found" in str(exc_info.value).lower()
 
     # 2. update_user_profile
@@ -754,6 +758,10 @@ async def test_unit_analytics_service_scoping_and_classification(
             designation="Team Lead",
         ),
     )
+    emp2.invitation_status = "ACTIVE"
+    other_emp.invitation_status = "ACTIVE"
+    mgr_user.invitation_status = "ACTIVE"
+    await db_session.commit()
     await user_service.set_user_reports_to(
         db=db_session, target_user_id=emp2.id, reports_to_id=mgr_user.id
     )

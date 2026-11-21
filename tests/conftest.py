@@ -28,6 +28,7 @@ from app.models.organization import Organization, OrgStatus  # noqa: F401
 from app.models.revoked_token import RevokedToken  # noqa: F401
 from app.models.task import Task  # noqa: F401
 from app.models.user import User, UserRole
+from app.models.user_token import UserToken  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +226,12 @@ def mock_send_welcome_email() -> AsyncGenerator[MagicMock, None]:
         return_value=True,
     ) as mock_smtp_welcome, patch(
         "app.core.email.SMTPEmailSender.send_verification_email",
+        return_value=True,
+    ), patch(
+        "app.core.email.SMTPEmailSender.send_invite_email",
+        return_value=True,
+    ), patch(
+        "app.core.email.SMTPEmailSender.send_password_reset_email",
         return_value=True,
     ):
         yield mock_smtp_welcome

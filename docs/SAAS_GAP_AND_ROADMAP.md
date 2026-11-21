@@ -135,7 +135,7 @@ The following audit matrix evaluates Teamloom's current codebase against the ind
 | **Rate Limiting** | DDoS protection, brute-force mitigation | **Present** | Level 1 sliding window with compound key `{IP, identifier}` (10/15m) preventing corporate NAT lockout, plus looser per-IP ceiling (100/15m) against spraying. Abstract `RateLimiter` interface with `InMemoryRateLimiter` and stale-key cleanup; `RedisRateLimiter` planned for horizontal multi-worker scaling. |
 | **Security Hardening** | CSRF, XSS, headers, secret management, lockout | **Present** | Constant-time dummy bcrypt verification, account lockout, dual-token revocation blacklist, memory-stored access tokens, `SameSite=Lax` cookies, parameterized SQL queries. |
 | **Legal & Compliance Pages** | Terms of Service, Privacy Policy, refund policy | **Missing** | No legal pages, cookie consent banners, or GDPR/data privacy disclaimers exist in the frontend. |
-| **Onboarding Experience** | Guided setup, product tour, invite workflows | **Partial** | Signup and email verification pages exist. **Gaps**: No first-time company onboarding wizard; employee onboarding uses temporary passwords rather than secure invite links (Slice 4e pending). |
+| **Onboarding Experience** | Guided setup, product tour, invite workflows | **Present / In Progress** | Signup and email verification complete. Employee onboarding backend migrated to secure 48h single-use invite tokens (`user_tokens`), self-serve password reset, and universal session invalidation via `tokens_valid_after` (Slice 4e PR 1 Backend complete; PR 2 Frontend UI in progress). |
 | **Test Coverage** | Automated unit, integration, and isolation test suite | **Present** | 205 automated tests covering RBAC, concurrency, tenant isolation, and migrations with ~83-87% statement coverage. |
 
 ---
@@ -227,9 +227,16 @@ flowchart TD
 - **C3: Fix `scripts/test_endpoints.py`**: Update line 52 to call `POST /auth/signup` instead of the non-existent `/auth/register`.
 
 #### 2. High Priority (Complete the Commercial SaaS Transition)
-- **H1: Implement Slice 4e (Employee Invite Flow)**:
-  - Replace admin-generated temporary passwords with secure, expiring set-password invite links (`POST /users/employees/invite`).
-  - Add invite status indicators (`Pending`, `Accepted`, `Expired`) and Resend/Revoke actions in `AdminEmployeesPage.jsx`.
+- **H1: Implement Slice 4e (Employee Invite Flow & Self-Serve Password Reset)**:
+  - **Backend (PR 1 - COMPLETED)**:
+    - Replaced admin temporary passwords with cryptographically secure 48-hour single-use invite links and 1-hour password reset links via new `user_tokens` table.
+    - Updated `POST /users/employees` to invite employee in `PENDING` state; added `resend-invite`, `revoke-invite`, and `send-password-reset`. Removed `reset-temp-password`.
+    - Added public `/auth/accept-invite`, `/auth/forgot-password`, `/auth/reset-password` with rate limiting and constant dummy-hash anti-enumeration timing.
+    - Implemented universal session invalidation via `users.tokens_valid_after` rejecting any JWTs issued before password updates.
+    - Added comprehensive test suite (22 unit/integration/concurrency tests in `test_invite_flow.py`, tenant isolation updates).
+  - **Frontend (PR 2 - NEXT)**:
+    - Add invite status badges (`Pending`, `Active`, `Revoked`) and Resend/Revoke/Send Reset action buttons in `AdminEmployeesPage.jsx`.
+    - Build `/accept-invite`, `/forgot-password`, and `/reset-password` public pages.
 - **H2: Finalize Slice 5 (Acceptance Scenarios Isolation Test Suite)**: **Completed (Resolved)**. Implemented in branch `test/tenant-isolation-suite` with 21 new black-box HTTP tests across all application routes in `tests/test_tenant_isolation.py` and a dedicated, extensible fixture harness in `tests/fixtures_tenant_isolation.py`. Verifies cross-tenant 404 anti-enumeration, strict list and pagination scoping, rejected cross-org write/foreign-key attacks, soft-delete cross-org invisibility, and query/body tenant parameter override neutralization.
 - **H3: Implement Slices 6 & 7 (Billing & Razorpay Integration)**:
   - Introduce `subscriptions` and `invoices` database models.

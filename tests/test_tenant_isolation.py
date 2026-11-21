@@ -328,38 +328,97 @@ async def test_cross_org_user_direct_reports_by_id_anti_enumeration(
     ("employee", 403),
 ])
 @pytest.mark.asyncio
-async def test_cross_org_user_reset_temp_password_anti_enumeration(
+async def test_cross_org_resend_invite_anti_enumeration(
     client: AsyncClient,
     isolation_setup: TenantIsolationSetup,
-    db_session: AsyncSession,
     role_key: str,
     expected_status: int,
 ):
     """
-    POST /users/{id}/reset-temp-password:
+    POST /users/{id}/resend-invite:
     - Admin A targeting Org B user receives 404 (same as non-existent ID).
     - Supervisor A and Employee A receive 403 (same as non-existent ID).
-    Org B user's credentials remain untouched.
     """
     headers = get_caller_headers(isolation_setup, role_key)
     emp_b = isolation_setup.org_b.employee
-    original_hash = emp_b.hashed_password
 
-    res_cross = await client.post(f"/users/{emp_b.id}/reset-temp-password", headers=headers)
+    res_cross = await client.post(f"/users/{emp_b.id}/resend-invite", headers=headers)
     assert res_cross.status_code == expected_status
     if expected_status == 404:
         assert res_cross.json()["detail"] == "User not found."
 
-    res_nonexistent = await client.post(f"/users/{NONEXISTENT_ID}/reset-temp-password", headers=headers)
+    res_nonexistent = await client.post(f"/users/{NONEXISTENT_ID}/resend-invite", headers=headers)
     assert res_nonexistent.status_code == expected_status
     if expected_status == 404:
         assert res_nonexistent.json()["detail"] == "User not found."
 
     assert res_cross.status_code == res_nonexistent.status_code
 
-    # Verify DB: password hash unchanged
-    await db_session.refresh(emp_b)
-    assert emp_b.hashed_password == original_hash
+
+@pytest.mark.parametrize("role_key,expected_status", [
+    ("admin", 404),
+    ("supervisor", 403),
+    ("employee", 403),
+])
+@pytest.mark.asyncio
+async def test_cross_org_revoke_invite_anti_enumeration(
+    client: AsyncClient,
+    isolation_setup: TenantIsolationSetup,
+    role_key: str,
+    expected_status: int,
+):
+    """
+    POST /users/{id}/revoke-invite:
+    - Admin A targeting Org B user receives 404 (same as non-existent ID).
+    - Supervisor A and Employee A receive 403 (same as non-existent ID).
+    """
+    headers = get_caller_headers(isolation_setup, role_key)
+    emp_b = isolation_setup.org_b.employee
+
+    res_cross = await client.post(f"/users/{emp_b.id}/revoke-invite", headers=headers)
+    assert res_cross.status_code == expected_status
+    if expected_status == 404:
+        assert res_cross.json()["detail"] == "User not found."
+
+    res_nonexistent = await client.post(f"/users/{NONEXISTENT_ID}/revoke-invite", headers=headers)
+    assert res_nonexistent.status_code == expected_status
+    if expected_status == 404:
+        assert res_nonexistent.json()["detail"] == "User not found."
+
+    assert res_cross.status_code == res_nonexistent.status_code
+
+
+@pytest.mark.parametrize("role_key,expected_status", [
+    ("admin", 404),
+    ("supervisor", 403),
+    ("employee", 403),
+])
+@pytest.mark.asyncio
+async def test_cross_org_send_password_reset_anti_enumeration(
+    client: AsyncClient,
+    isolation_setup: TenantIsolationSetup,
+    role_key: str,
+    expected_status: int,
+):
+    """
+    POST /users/{id}/send-password-reset:
+    - Admin A targeting Org B user receives 404 (same as non-existent ID).
+    - Supervisor A and Employee A receive 403 (same as non-existent ID).
+    """
+    headers = get_caller_headers(isolation_setup, role_key)
+    emp_b = isolation_setup.org_b.employee
+
+    res_cross = await client.post(f"/users/{emp_b.id}/send-password-reset", headers=headers)
+    assert res_cross.status_code == expected_status
+    if expected_status == 404:
+        assert res_cross.json()["detail"] == "User not found."
+
+    res_nonexistent = await client.post(f"/users/{NONEXISTENT_ID}/send-password-reset", headers=headers)
+    assert res_nonexistent.status_code == expected_status
+    if expected_status == 404:
+        assert res_nonexistent.json()["detail"] == "User not found."
+
+    assert res_cross.status_code == res_nonexistent.status_code
 
 
 @pytest.mark.parametrize("role_key,expected_status", [
@@ -1200,13 +1259,13 @@ async def test_password_reset_confirm_anti_enumeration(
 ):
     """
     POST /auth/reset-password:
-    Verifies that calling password reset confirmation responds uniformly with 404 Not Found,
-    never leaking tenant context or token validation state.
+    Verifies that calling password reset confirmation with invalid/fake tokens responds
+    uniformly with HTTP 400 'Invalid or expired token.', never leaking tenant context or token validation state.
     """
     payload = {"token": token_val, "new_password": "NewSecurePassword123!"}
     res = await client.post("/auth/reset-password", json=payload)
-    assert res.status_code == 404
-    assert res.json()["detail"] == "Not Found"
+    assert res.status_code == 400
+    assert res.json()["detail"] == "Invalid or expired token."
 
 
 @pytest.mark.parametrize("target_email_type", [

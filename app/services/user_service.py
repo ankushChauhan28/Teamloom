@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.exceptions import (
     AppException,
     BadRequestException,
@@ -18,6 +19,7 @@ from app.core.security import hash_password
 from app.models.organization import Organization
 from app.models.user import User, UserRole
 from app.schemas.user import EmployeeCreate, UserDeactivateRequest, UserUpdate
+from app.services import token_service
 from app.services.common import get_scoped_or_404
 
 logger = logging.getLogger(__name__)
@@ -99,39 +101,21 @@ def _generate_next_employee_code(db: AsyncSession | None = None) -> str:
     return f"{secrets.randbelow(10**10):010d}"
 
 
-def _generate_temp_password(length: int = 14) -> str:
-    """
-    Generates a cryptographically secure random temporary password containing
-    upper, lower, digits, and punctuation characters.
-    """
-    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
-    pwd = [
-        secrets.choice(string.ascii_uppercase),
-        secrets.choice(string.ascii_lowercase),
-        secrets.choice(string.digits),
-        secrets.choice("!@#$%^&*"),
-    ]
-    for _ in range(length - 4):
-        pwd.append(secrets.choice(alphabet))
-    secrets.SystemRandom().shuffle(pwd)
-    return "".join(pwd)
-
-
 async def create_employee(
     db: AsyncSession,
     employee_in: EmployeeCreate,
     organization_id: int | None = None,
 ) -> tuple[User, str]:
     """
-    Creates a new employee account:
+    Creates a new employee invitation account:
     - Verifies email uniqueness (case-insensitive).
     - Resolves organization_id.
-    - Validates reports_to_id belongs to the same organization if provided.
-    - Generates 10-digit random numeric User ID with savepoint-based retry loop for collision safety.
-    - Generates temporary password via secrets module and hashes it off the event loop.
-    - Sets must_change_password = True.
-    - Sets is_email_verified = True (admin-created employees do not require email verification).
-    - Returns tuple of (created_user, temp_password).
+    - Validates reports_to_id belongs to the same organization and is ACTIVE.
+    - Generates a 10-digit random numeric User ID.
+    - Hashes a random discarded secret via bcrypt (real bcrypt hash, never sentinel string).
+    - Sets invitation_status = 'PENDING', is_active = True, is_email_verified = False.
+    - Issues a 48h single-use INVITE token stored hashed in user_tokens.
+    - Returns tuple of (created_user, raw_invite_token).
     """
     norm_email = employee_in.email.strip().lower()
     result = await db.execute(select(User).where(func.lower(User.email) == norm_email))
@@ -159,16 +143,19 @@ async def create_employee(
         organization_id = org_id
 
     if employee_in.reports_to_id is not None:
-        await get_scoped_or_404(
+        supervisor = await get_scoped_or_404(
             db=db,
             model=User,
             id_val=employee_in.reports_to_id,
             organization_id=organization_id,
             error_msg="Reports-to supervisor user not found.",
         )
+        if supervisor.invitation_status != "ACTIVE":
+            raise BadRequestException("Cannot assign a pending or revoked user as supervisor.")
 
-    temp_password = _generate_temp_password()
-    hashed_pwd = await asyncio.to_thread(hash_password, temp_password)
+    # Generate a real bcrypt hash of a random discarded secret
+    discarded_secret = secrets.token_urlsafe(32)
+    hashed_pwd = await asyncio.to_thread(hash_password, discarded_secret)
 
     max_attempts = 10
     new_user = None
@@ -185,9 +172,11 @@ async def create_employee(
                     reports_to_id=employee_in.reports_to_id,
                     designation=employee_in.designation,
                     employee_code=emp_code,
-                    must_change_password=True,
-                    is_email_verified=True,
-                    email_verified_at=datetime.now(UTC),
+                    must_change_password=False,
+                    is_email_verified=False,
+                    email_verified_at=None,
+                    is_active=True,
+                    invitation_status="PENDING",
                     organization_id=organization_id,
                 )
                 db.add(new_user)
@@ -216,15 +205,24 @@ async def create_employee(
             status_code=500,
         )
 
-    return new_user, temp_password
+    raw_token = await token_service.generate_user_token(
+        db=db,
+        user_id=new_user.id,
+        token_type="INVITE",
+        expire_hours=settings.INVITE_TOKEN_EXPIRE_HOURS,
+    )
+    await db.commit()
+    return new_user, raw_token
 
 
-async def reset_employee_temp_password(
+async def resend_invite(
     db: AsyncSession, target_user_id: int, organization_id: int | None = None
 ) -> tuple[User, str]:
     """
-    Resets an employee's password to a new temporary password and sets must_change_password = True.
-    Hashes password off the event loop. Returns (user, temp_password). Scoped by organization_id.
+    Resends an invitation to a PENDING employee:
+    - Invalidates existing invite tokens for this user.
+    - Generates a new 48h INVITE token.
+    - Returns (user, raw_token).
     """
     user = await get_scoped_or_404(
         db=db,
@@ -233,14 +231,74 @@ async def reset_employee_temp_password(
         organization_id=organization_id,
         error_msg="User not found.",
     )
+    if user.invitation_status != "PENDING":
+        raise BadRequestException("User invite is not pending.")
 
-    temp_password = _generate_temp_password()
-    user.hashed_password = await asyncio.to_thread(hash_password, temp_password)
-    user.must_change_password = True
+    raw_token = await token_service.generate_user_token(
+        db=db,
+        user_id=user.id,
+        token_type="INVITE",
+        expire_hours=settings.INVITE_TOKEN_EXPIRE_HOURS,
+    )
     await db.commit()
     await db.refresh(user)
+    return user, raw_token
 
-    return user, temp_password
+
+async def revoke_invite(
+    db: AsyncSession, target_user_id: int, organization_id: int | None = None
+) -> User:
+    """
+    Revokes a pending invitation:
+    - Sets invitation_status = 'REVOKED' and is_active = False.
+    - Invalidates all pending INVITE tokens.
+    """
+    user = await get_scoped_or_404(
+        db=db,
+        model=User,
+        id_val=target_user_id,
+        organization_id=organization_id,
+        error_msg="User not found.",
+    )
+    if user.invitation_status != "PENDING":
+        raise BadRequestException("User invite is not pending.")
+
+    user.invitation_status = "REVOKED"
+    user.is_active = False
+    await token_service.invalidate_user_tokens(db=db, user_id=user.id, token_type="INVITE")
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def send_password_reset_to_employee(
+    db: AsyncSession, target_user_id: int, organization_id: int | None = None
+) -> tuple[User, str]:
+    """
+    Admin triggers password reset link for an ACTIVE employee.
+    Replaces the legacy reset_employee_temp_password flow.
+    """
+    user = await get_scoped_or_404(
+        db=db,
+        model=User,
+        id_val=target_user_id,
+        organization_id=organization_id,
+        error_msg="User not found.",
+    )
+    if user.invitation_status != "ACTIVE":
+        raise BadRequestException("Can only send password reset to active users.")
+    if not user.is_active:
+        raise BadRequestException("User is inactive.")
+
+    raw_token = await token_service.generate_user_token(
+        db=db,
+        user_id=user.id,
+        token_type="PASSWORD_RESET",
+        expire_hours=settings.PASSWORD_RESET_TOKEN_EXPIRE_HOURS,
+    )
+    await db.commit()
+    await db.refresh(user)
+    return user, raw_token
 
 
 async def set_user_reports_to(
@@ -282,6 +340,8 @@ async def set_user_reports_to(
         organization_id=org_to_check,
         error_msg="Reports-to supervisor user not found.",
     )
+    if proposed_supervisor.invitation_status != "ACTIVE":
+        raise BadRequestException("Cannot assign a pending or revoked user as supervisor.")
 
     # Cycle detection: walk up the chain starting from proposed_supervisor
     curr_supervisor = proposed_supervisor
@@ -468,8 +528,8 @@ async def deactivate_user(
                 organization_id=target_user.organization_id,
                 error_msg="Reports-to supervisor user not found.",
             )
-            if not mgr.is_active:
-                raise BadRequestException(f"Proposed supervisor (ID: {new_mgr_id}) is inactive.")
+            if not mgr.is_active or mgr.invitation_status != "ACTIVE":
+                raise BadRequestException(f"Proposed supervisor (ID: {new_mgr_id}) is inactive or pending.")
             managers_cache[new_mgr_id] = mgr
 
     # Cycle detection across the new hierarchy graph
@@ -509,6 +569,8 @@ async def deactivate_user(
         report.reports_to_id = resolved_mapping[report.id]
 
     target_user.is_active = False
+    if target_user.invitation_status == "PENDING":
+        await token_service.invalidate_user_tokens(db=db, user_id=target_user.id)
 
     await db.commit()
     await db.refresh(target_user)
@@ -528,6 +590,9 @@ async def reactivate_user(
         organization_id=organization_id,
         error_msg="User not found.",
     )
+
+    if target_user.invitation_status == "REVOKED":
+        raise BadRequestException("Revoked users cannot be reactivated. Issue a new invite instead.")
 
     target_user.is_active = True
     await db.commit()

@@ -28,6 +28,18 @@ class EmailSender(ABC):
         """Sends a welcome email containing employee User ID and initial temporary password."""
         pass
 
+    @abstractmethod
+    def send_invite_email(
+        self, email: str, full_name: str, employee_code: str, token: str
+    ) -> bool:
+        """Sends an employee invitation link with single-use token and 48-hour expiration."""
+        pass
+
+    @abstractmethod
+    def send_password_reset_email(self, email: str, full_name: str, token: str) -> bool:
+        """Sends a self-serve password reset link with single-use token and 1-hour expiration."""
+        pass
+
 
 class SMTPEmailSender(EmailSender):
     """
@@ -125,12 +137,128 @@ class SMTPEmailSender(EmailSender):
             logger.error("Failed to send welcome email to %s: %s", email, e, exc_info=True)
             return False
 
+    def send_invite_email(
+        self, email: str, full_name: str, employee_code: str, token: str
+    ) -> bool:
+        if not (settings.SMTP_HOST and settings.SMTP_USERNAME and settings.SMTP_APP_PASSWORD):
+            logger.warning("SMTP is not configured. Falling back to Console logger for invite email.")
+            return ConsoleEmailSender().send_invite_email(email, full_name, employee_code, token)
+
+        from_email = settings.SMTP_FROM_EMAIL or settings.SMTP_USERNAME
+        invite_link = f"{settings.FRONTEND_URL}/accept-invite?token={token}"
+
+        subject = "Invitation to join Teamloom"
+        body_text = f"""Hello {full_name},
+
+You have been invited to join Teamloom.
+Your Employee User ID: {employee_code}
+
+Please activate your account and choose your password by visiting the link below:
+{invite_link}
+
+This invitation link will expire in {settings.INVITE_TOKEN_EXPIRE_HOURS} hours.
+If you did not expect this invitation, please contact your administrator.
+"""
+        body_html = f"""
+        <html>
+          <body style="font-family: sans-serif; color: #333; line-height: 1.6;">
+            <h2>Welcome to Teamloom</h2>
+            <p>Hello {full_name},</p>
+            <p>You have been invited to join Teamloom by your administrator.</p>
+            <div style="background-color: #f4f6f8; padding: 15px; border-radius: 8px; margin: 15px 0;">
+              <p><strong>Employee User ID:</strong> {employee_code}</p>
+              <p><strong>Email:</strong> {email}</p>
+            </div>
+            <p>Please click the button below to accept your invitation and set your password:</p>
+            <div style="margin: 25px 0;">
+              <a href="{invite_link}" style="background-color: #3FA88F; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Accept Invitation & Set Password</a>
+            </div>
+            <p style="font-size: 13px; color: #666;">Or copy and paste this link into your browser:</p>
+            <p style="font-size: 13px; color: #3FA88F; word-break: break-all;">{invite_link}</p>
+            <p style="font-size: 12px; color: #999; margin-top: 30px;">This link will expire in {settings.INVITE_TOKEN_EXPIRE_HOURS} hours. If you did not expect this invitation, please contact your organization administrator.</p>
+          </body>
+        </html>
+        """
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = from_email
+        msg["To"] = email
+        msg.attach(MIMEText(body_text, "plain"))
+        msg.attach(MIMEText(body_html, "html"))
+
+        try:
+            smtp_password = settings.SMTP_APP_PASSWORD.replace(" ", "").strip()
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
+                server.starttls()
+                server.login(settings.SMTP_USERNAME, smtp_password)
+                server.send_message(msg)
+            logger.info("Invite email successfully sent via SMTP to %s", email)
+            return True
+        except Exception as e:
+            logger.error("Failed to send invite email to %s: %s", email, e, exc_info=True)
+            return False
+
+    def send_password_reset_email(self, email: str, full_name: str, token: str) -> bool:
+        if not (settings.SMTP_HOST and settings.SMTP_USERNAME and settings.SMTP_APP_PASSWORD):
+            logger.warning("SMTP is not configured. Falling back to Console logger for password reset email.")
+            return ConsoleEmailSender().send_password_reset_email(email, full_name, token)
+
+        from_email = settings.SMTP_FROM_EMAIL or settings.SMTP_USERNAME
+        reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
+
+        subject = "Reset your Teamloom password"
+        body_text = f"""Hello {full_name},
+
+A password reset request was received for your Teamloom account.
+
+Please reset your password by visiting the link below:
+{reset_link}
+
+This link will expire in {settings.PASSWORD_RESET_TOKEN_EXPIRE_HOURS} hour(s).
+If you did not request a password reset, you can safely ignore this email.
+"""
+        body_html = f"""
+        <html>
+          <body style="font-family: sans-serif; color: #333; line-height: 1.6;">
+            <h2>Password Reset Request</h2>
+            <p>Hello {full_name},</p>
+            <p>We received a request to reset the password for your Teamloom account.</p>
+            <div style="margin: 25px 0;">
+              <a href="{reset_link}" style="background-color: #3FA88F; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Reset Password</a>
+            </div>
+            <p style="font-size: 13px; color: #666;">Or copy and paste this link into your browser:</p>
+            <p style="font-size: 13px; color: #3FA88F; word-break: break-all;">{reset_link}</p>
+            <p style="font-size: 12px; color: #999; margin-top: 30px;">This link will expire in {settings.PASSWORD_RESET_TOKEN_EXPIRE_HOURS} hour(s). If you did not request this, please ignore this email.</p>
+          </body>
+        </html>
+        """
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = from_email
+        msg["To"] = email
+        msg.attach(MIMEText(body_text, "plain"))
+        msg.attach(MIMEText(body_html, "html"))
+
+        try:
+            smtp_password = settings.SMTP_APP_PASSWORD.replace(" ", "").strip()
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
+                server.starttls()
+                server.login(settings.SMTP_USERNAME, smtp_password)
+                server.send_message(msg)
+            logger.info("Password reset email successfully sent via SMTP to %s", email)
+            return True
+        except Exception as e:
+            logger.error("Failed to send password reset email to %s: %s", email, e, exc_info=True)
+            return False
+
 
 class ConsoleEmailSender(EmailSender):
     """
     Console/Logger implementation of EmailSender.
     Used for local development, CI test suites, and deployments without external SMTP access.
-    Prints the email verification link to standard server logs in a clear, greppable format.
+    Prints the email verification, invite, and password reset links to standard server logs in a clear, greppable format.
     """
 
     def send_verification_email(self, email: str, full_name: str, token: str) -> bool:
@@ -149,6 +277,27 @@ class ConsoleEmailSender(EmailSender):
             "[DEV EMAIL] Welcome email for %s: User ID=%s",
             email,
             employee_code,
+        )
+        return True
+
+    def send_invite_email(
+        self, email: str, full_name: str, employee_code: str, token: str
+    ) -> bool:
+        invite_link = f"{settings.FRONTEND_URL}/accept-invite?token={token}"
+        logger.info(
+            "[DEV EMAIL] Invite link for %s (Code: %s): %s",
+            email,
+            employee_code,
+            invite_link,
+        )
+        return True
+
+    def send_password_reset_email(self, email: str, full_name: str, token: str) -> bool:
+        reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
+        logger.info(
+            "[DEV EMAIL] Password reset link for %s: %s",
+            email,
+            reset_link,
         )
         return True
 
@@ -212,6 +361,59 @@ def send_verification_email(email: str, full_name: str, token: str) -> bool:
     except Exception as exc:
         logger.error(
             "Unhandled exception in background verification email task for %s: %s",
+            email,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
+def send_invite_email(
+    email: str, full_name: str, employee_code: str, token: str
+) -> bool:
+    """
+    Helper invoking get_email_sender().send_invite_email().
+    Catches and logs any unhandled exceptions to prevent background task failure from crashing.
+    """
+    try:
+        sender = get_email_sender()
+        success = sender.send_invite_email(
+            email=email,
+            full_name=full_name,
+            employee_code=employee_code,
+            token=token,
+        )
+        if not success:
+            logger.error("Email delivery failed for invite email to %s", email)
+        return success
+    except Exception as exc:
+        logger.error(
+            "Unhandled exception in background invite email task for %s: %s",
+            email,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
+def send_password_reset_email(email: str, full_name: str, token: str) -> bool:
+    """
+    Helper invoking get_email_sender().send_password_reset_email().
+    Catches and logs any unhandled exceptions to prevent background task failure from crashing.
+    """
+    try:
+        sender = get_email_sender()
+        success = sender.send_password_reset_email(
+            email=email,
+            full_name=full_name,
+            token=token,
+        )
+        if not success:
+            logger.error("Email delivery failed for password reset email to %s", email)
+        return success
+    except Exception as exc:
+        logger.error(
+            "Unhandled exception in background password reset email task for %s: %s",
             email,
             exc,
             exc_info=True,

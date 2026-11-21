@@ -64,12 +64,12 @@ class EmployeeCreateResponse(BaseModel):
     access_level: int = 3
     reports_to_id: int | None = None
     designation: str | None = None
-    must_change_password: bool
     is_active: bool = True
     is_email_verified: bool = False
     email_verified_at: datetime | None = None
     created_at: datetime
-    email_sent: bool = False
+    delivery_queued: bool = False
+    invitation_status: str = "PENDING"
 
 
 class PasswordChange(BaseModel):
@@ -123,6 +123,7 @@ class UserRead(UserBase):
     must_change_password: bool = False
     is_active: bool = True
     created_at: datetime
+    invitation_status: str = "ACTIVE"
 
 
 UserResponse = UserRead
@@ -179,3 +180,50 @@ class ResendVerificationRequest(BaseModel):
 
 class ResendVerificationResponse(BaseModel):
     message: str = "If an unverified account exists for this email, a verification link has been sent."
+
+
+class ResendInviteResponse(BaseModel):
+    message: str = "Invitation resent."
+    delivery_queued: bool = True
+
+
+class RevokeInviteResponse(BaseModel):
+    message: str = "Invitation revoked."
+
+
+class SendPasswordResetResponse(BaseModel):
+    message: str = "Password reset link sent."
+    delivery_queued: bool = True
+
+
+class AcceptInviteRequest(BaseModel):
+    token: str
+    password: str
+
+
+class AcceptInviteResponse(BaseModel):
+    message: str = "Account activated. You may now log in."
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v: str) -> str:
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
+
+
+class ForgotPasswordResponse(BaseModel):
+    message: str = "If an account with that email exists, a password reset link has been sent."
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+class ResetPasswordResponse(BaseModel):
+    message: str = "Password has been reset. Please log in."

@@ -48,6 +48,8 @@ completed_UI.md
 *.db
 *.sqlite
 *.sqlite3
+*.sql
+
 
 
 

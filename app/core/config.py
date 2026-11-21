@@ -44,6 +44,26 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
     RATE_LIMITER_BACKEND: str = "memory"
 
+    # Slice 4e invite & password-reset rate limits
+    INVITE_RATE_LIMIT_PER_ADMIN: int = 30         # invites per admin per hour
+    INVITE_RATE_LIMIT_WINDOW_SECONDS: int = 3600
+    RESEND_INVITE_PER_USER_LIMIT: int = 3          # resends per target user per hour
+    RESEND_INVITE_PER_ADMIN_LIMIT: int = 30
+    RESEND_INVITE_WINDOW_SECONDS: int = 3600
+    SEND_RESET_PER_USER_LIMIT: int = 5
+    SEND_RESET_PER_ADMIN_LIMIT: int = 50
+    SEND_RESET_WINDOW_SECONDS: int = 3600
+    FORGOT_PASSWORD_COMPOUND_LIMIT: int = 3        # per {IP, email} per 15 min
+    FORGOT_PASSWORD_COMPOUND_WINDOW: int = 900
+    FORGOT_PASSWORD_IP_LIMIT: int = 20             # per IP per 15 min
+    FORGOT_PASSWORD_IP_WINDOW: int = 900
+    ACCEPT_INVITE_IP_LIMIT: int = 10
+    ACCEPT_INVITE_IP_WINDOW: int = 900
+    RESET_PASSWORD_IP_LIMIT: int = 10
+    RESET_PASSWORD_IP_WINDOW: int = 900
+    INVITE_TOKEN_EXPIRE_HOURS: int = 48
+    PASSWORD_RESET_TOKEN_EXPIRE_HOURS: int = 1
+
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
     def assemble_database_url(cls, v: str) -> str:

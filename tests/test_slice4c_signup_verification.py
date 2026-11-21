@@ -341,24 +341,42 @@ async def test_admin_created_employee_login_without_verification(
     client: AsyncClient, admin_headers: dict[str, str], db_session: AsyncSession
 ) -> None:
     """
-    Employees created by admin inside an organization have is_email_verified=True
-    and can log in immediately with their 10-digit User ID.
+    Employees created by admin inside an organization start in PENDING state (is_email_verified=False).
+    Upon accepting invitation via /auth/accept-invite, is_email_verified becomes True and email_verified_at is stamped.
     """
-    emp_payload = {
-        "full_name": "Direct Employee",
-        "email": "direct.emp@example.com",
-        "access_level": 3,
-    }
-    create_res = await client.post("/users/employees", json=emp_payload, headers=admin_headers)
-    assert create_res.status_code == 201
+    captured_tokens = []
+    with patch(
+        "app.routes.users.send_invite_email",
+        side_effect=lambda email, full_name, employee_code, token, **kw: captured_tokens.append(token) or True,
+    ):
+        emp_payload = {
+            "full_name": "Direct Employee",
+            "email": "direct.emp@example.com",
+            "access_level": 3,
+        }
+        create_res = await client.post("/users/employees", json=emp_payload, headers=admin_headers)
+        assert create_res.status_code == 201
     emp_data = create_res.json()
     emp_code = emp_data["employee_code"]
+    raw_token = captured_tokens[0]
 
-    # Verify user in database has is_email_verified = True
+    # Verify user in database initially has is_email_verified = False and invitation_status = PENDING
     user_stmt = select(User).where(User.employee_code == emp_code)
     user = (await db_session.execute(user_stmt)).scalar_one_or_none()
+    assert user.is_email_verified is False
+    assert user.invitation_status == "PENDING"
+
+    # Accept invite
+    accept_res = await client.post(
+        "/auth/accept-invite",
+        json={"token": raw_token, "password": "SecurePassword123!"},
+    )
+    assert accept_res.status_code == 200
+
+    await db_session.refresh(user)
     assert user.is_email_verified is True
     assert user.email_verified_at is not None
+    assert user.invitation_status == "ACTIVE"
 
 
 @pytest.mark.asyncio

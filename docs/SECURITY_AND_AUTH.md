@@ -80,19 +80,30 @@ Teamloom utilizes a custom **Dual-Token JSON Web Token (JWT)** architecture sign
   - `mode == "employee"`: Query matches `employee_code == identifier` AND `access_level > 1`.
   - Logging in with an admin's email in employee mode, or an employee's code in admin mode, is treated as user-not-found.
 - **Anti-Enumeration Timing Protection**:
-  - Non-existent user, wrong mode, unverified admin, deactivated user, locked account, and invalid password all execute `verify_password(password, DUMMY_HASH)` or `verify_password(password, user.hashed_password)` followed by `await db.commit()`.
+  - Non-existent user, wrong mode, unverified admin, pending or revoked invite status, deactivated user, locked account, and invalid password all execute `verify_password(password, DUMMY_HASH)` or `verify_password(password, user.hashed_password)` followed by `await db.commit()`.
   - Server response timing and database I/O profiles are indistinguishable.
   - Returns identical error: HTTP 401 `{"detail": "Incorrect credentials."}`.
+- **Invitation Status Enforcement**:
+  - Pending employees (`invitation_status == "PENDING"`) and revoked invitations (`invitation_status == "REVOKED"`) cannot log in under any circumstances.
+  - Attempting to log in with an unaccepted employee code executes the `DUMMY_HASH` timing defense and returns 401 `"Incorrect credentials."` without leaking invite state.
 - **Account Lockout Rules**:
   - Failed password attempts increment `failed_login_attempts`.
   - Reaching **5 failed attempts** sets `locked_until = now() + timedelta(minutes=15)`.
   - Successful authentication resets `failed_login_attempts = 0` and `locked_until = None`.
 
-### 2.3 Password Management & Forced First-Time Reset
-- **New Hire Onboarding**: When an admin provisions an employee (`POST /users/employees`), the backend sets `must_change_password = true`.
-- **Route Guarding**: All protected routes depend on `require_password_change_cleared` (`app/core/security.py`). If `must_change_password == True`, raises HTTP 403 `{"detail": "password_change_required"}`.
-- **Frontend Interception**: `ProtectedRoute.jsx` intercepts this detail and redirects to `/change-password` without rendering application dashboards.
-- **Password Update**: `POST /auth/change-password` validates `current_password`, hashes `new_password`, sets `must_change_password = false`, and restores full system access.
+### 2.3 Employee Onboarding & Single-Use Invite Flow (Slice 4e)
+- **New Hire Onboarding**: When an admin provisions an employee (`POST /users/employees`), the backend creates the user record in `invitation_status = 'PENDING'` with a bcrypt hash of a random discarded secret (never a plaintext or sentinel string).
+- **Cryptographic Invite Tokens**: Generates a 48-hour single-use token via `secrets.token_urlsafe(32)`. The token's SHA-256 hex digest is stored in `user_tokens` (`token_type='INVITE'`). The raw token is only sent in the invitation email via `BackgroundTasks` (or printed to dev console).
+- **Account Activation**: The new employee calls `POST /auth/accept-invite` with `{token, password}`. The endpoint atomically consumes the token via a single-statement `UPDATE ... WHERE used_at IS NULL AND expires_at > now() RETURNING`, validates password strength, updates `hashed_password`, sets `invitation_status = 'ACTIVE'`, `invitation_accepted_at = now()`, and `is_email_verified = True`.
+- **Legacy Password Reset Backward Compatibility**: Existing legacy accounts with `must_change_password = True` retain their first-login change flow: protected routes return HTTP 403 `{"detail": "password_change_required"}` until `POST /auth/change-password` is executed.
+
+### 2.4 Self-Serve Password Reset & Universal Session Invalidation
+- **Self-Serve Forgot Password**: `POST /auth/forgot-password` accepts `{email}`. Implements strict anti-enumeration: executes dummy bcrypt timing for unknown or unverified/revoked accounts, returning identical HTTP 200 `{"message": "If an account exists with that email, a password reset link has been sent."}`. For active users, generates a 1-hour single-use `PASSWORD_RESET` token in `user_tokens`.
+- **Reset Password**: `POST /auth/reset-password` accepts `{token, new_password}`. Atomically consumes the token, validates password complexity, updates password hash, and triggers immediate session invalidation.
+- **Immediate Session Invalidation (`tokens_valid_after`)**:
+  - `users.tokens_valid_after` (`TIMESTAMP WITH TIME ZONE`) stores the cutoff timestamp for valid tokens.
+  - Set to `now()` on password reset (`/auth/reset-password`), invite acceptance (`/auth/accept-invite`), and password change (`/auth/change-password`).
+  - Both `get_current_user` in `app/core/security.py` (access tokens) and `refresh_access_token` in `app/services/auth_service.py` (refresh tokens) check the token's issued-at claim: if `token.iat < user.tokens_valid_after`, the token is rejected immediately with HTTP 401 Unauthorized (`"Token has been revoked by a security event."`), terminating all concurrent sessions across devices without waiting for JWT expiration.
 
 ---
 
@@ -215,7 +226,7 @@ Authority is governed by integer `access_level` on `users` (`app/core/permission
 Teamloom implements strict multi-tenancy at the application and database layers. To provide mathematical certainty that an authenticated user of Organization A cannot read, modify, delete, or discover data belonging to Organization B, an API-level tenant isolation test suite is implemented in `tests/test_tenant_isolation.py` backed by dedicated fixtures in `tests/fixtures_tenant_isolation.py`.
 
 The suite executes **pure black-box HTTP tests** through FastAPI's `AsyncClient`, validating external security contracts without internal mocking:
-1. **By-ID Access & Anti-Enumeration**: Target resource IDs belonging to Org B across all single-resource endpoints (`GET /tasks/{id}`, `PATCH /tasks/{id}`, `DELETE /tasks/{id}`, `PATCH /leaves/{id}`, `GET /users/{id}/direct-reports`, `POST /users/{id}/reset-temp-password`, `PATCH /users/{id}/reports-to`, `PATCH /users/{id}/deactivate`, `PATCH /users/{id}/reactivate`). Every request returns HTTP 404 with identical error messages to non-existent IDs, preventing cross-tenant existence enumeration.
+1. **By-ID Access & Anti-Enumeration**: Target resource IDs belonging to Org B across all single-resource endpoints (`GET /tasks/{id}`, `PATCH /tasks/{id}`, `DELETE /tasks/{id}`, `PATCH /leaves/{id}`, `GET /users/{id}/direct-reports`, `POST /users/{id}/resend-invite`, `POST /users/{id}/revoke-invite`, `POST /users/{id}/send-password-reset`, `PATCH /users/{id}/reports-to`, `PATCH /users/{id}/deactivate`, `PATCH /users/{id}/reactivate`). Every request returns HTTP 404 with identical error messages to non-existent IDs, preventing cross-tenant existence enumeration.
 2. **List Endpoints & Pagination Scoping**: Endpoints returning collections (`/tasks/`, `/tasks/team`, `/leaves/`, `/leaves/team`, `/users/`, `/users/me/reports`) and their `X-Total-Count` headers strictly count and return only Org A entities, completely excluding Org B rows even when Org B has a larger volume of records.
 3. **Cross-Tenant Write & Foreign-Key Injection Attacks**:
    - Assigning a task to an Org B user returns HTTP 404 (`Assigned user with ID ... not found.`).
@@ -246,11 +257,13 @@ Every cross-tenant attack (by-id access, collection listing, foreign-key injecti
 
 For endpoints requiring elevated privileges (such as employee creation, user deactivation/reactivation, manager reassignment, leave reviews, and task deletion), roles lacking authority return their standard HTTP 403 Forbidden response identically for both cross-tenant resource IDs and non-existent IDs (`NONEXISTENT_ID = 9999999`). Where roles have permission (e.g., GET/PATCH tasks), cross-tenant IDs and non-existent IDs return HTTP 404 Not Found identically. This guarantees **zero existence leakage** across all roles and resources.
 
-### 5.4 Password Reset & Account Recovery Anti-Enumeration
+### 5.4 Password Reset & Account Recovery Anti-Enumeration (Slice 4e)
 The application enforces strict anti-enumeration across authentication recovery channels:
 1. **Public Verification Resend (`POST /auth/resend-verification`)**: Responds with HTTP 200 and an identical generic message (`"If an unverified account exists for this email, a verification link has been sent."`) regardless of whether the email belongs to Org A, Org B, or does not exist at all.
-2. **Password Reset Endpoints (`POST /auth/request-password-reset`, `POST /auth/reset-password`)**: Because self-serve password reset is not exposed in the API (deferred to operator tooling), requests to these endpoints return HTTP 404 Not Found uniformly, preventing cross-tenant account enumeration or state alteration.
-3. **Password Change (`POST /auth/change-password`)**: Authenticated endpoint bound strictly to `current_user.id`; changing an Org A user's password leaves Org B user hashes completely intact.
+2. **Public Self-Serve Forgot Password (`POST /auth/forgot-password`)**: Responds with HTTP 200 and an identical generic message (`"If an account exists with that email, a password reset link has been sent."`) with constant dummy-hash timing regardless of whether the email exists, belongs to another organization, is deactivated, revoked, or pending.
+3. **Public Reset Password (`POST /auth/reset-password`) and Accept Invite (`POST /auth/accept-invite`)**: Any invalid, expired, already-consumed, or revoked token returns an identical generic error (`"Invalid or expired token."`), preventing token-state probing.
+4. **Tenant Isolation of Admin Endpoints**: `POST /users/{id}/resend-invite`, `POST /users/{id}/revoke-invite`, and `POST /users/{id}/send-password-reset` return HTTP 404 for cross-tenant IDs, identically to non-existent IDs.
+5. **Password Change (`POST /auth/change-password`)**: Authenticated endpoint bound strictly to `current_user.id`; changing an Org A user's password leaves Org B user hashes completely intact.
 
 ### 5.5 How to Extend the Isolation Suite
 When new endpoints are added (e.g., Slice 4e Employee Invites or Slice 6 Billing):

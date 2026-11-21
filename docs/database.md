@@ -53,6 +53,7 @@ The application stores different categories of data across dedicated infrastruct
 | **User Identity & Auth** | Full name, email, designation, access level, employee code, lockout counters | PostgreSQL (`users` table) | Emails lowercased & indexed; employee codes unique 10-digit |
 | **Passwords** | User authentication credentials | PostgreSQL (`users.hashed_password`) | **Bcrypt** hashed with individual random salt (`gensalt()`) |
 | **Email Verification Tokens** | Single-use registration activation tokens | PostgreSQL (`email_verification_tokens` table) | **SHA-256 hash** (`token_hash`); raw token never stored in DB |
+| **User Tokens (Invites & Resets)** | Single-use 48h employee invite tokens and 1h password reset tokens | PostgreSQL (`user_tokens` table) | **SHA-256 hash** (`token_hash`); raw token never stored in DB; composite index on `(user_id, token_type, used_at)` |
 | **Token Invalidation Blacklist** | Revoked JWT identifiers (`jti`) and expiry timestamps | PostgreSQL (`revoked_tokens` table) | Unique index on `token_jti`; pruned every 24h |
 | **Tasks & Concurrency** | Title, description, status, priority, due datetime, completed_at, version, is_deleted, deleted_at, deleted_by | PostgreSQL (`tasks` table) | Plaintext; version checked for optimistic concurrency (409); soft delete columns (`is_deleted`, `deleted_at`, `deleted_by`) |
 | **Leave Requests** | Employee ID, date range, reason string, review status, reviewer ID | PostgreSQL (`leave_requests` table) | Plaintext |
@@ -64,7 +65,7 @@ The application stores different categories of data across dedicated infrastruct
 
 ## 3. Full Table Schema Reference
 
-The database comprises **6 application tables** (plus Alembic's internal `alembic_version` metadata table).
+The database comprises **7 application tables** (plus Alembic's internal `alembic_version` metadata table).
 
 ```
    1. organizations
@@ -73,6 +74,7 @@ The database comprises **6 application tables** (plus Alembic's internal `alembi
    4. leave_requests
    5. email_verification_tokens
    6. revoked_tokens
+   7. user_tokens
 ```
 
 ---
@@ -105,7 +107,7 @@ The database comprises **6 application tables** (plus Alembic's internal `alembi
 ### 3.2 Table: `users`
 - **Purpose**: System accounts for all operational roles (Admins, Managers, Team Leads, Contributors).
 - **ORM Model**: `User` (`app/models/user.py`)
-- **Migration History**: `f2850ec5859c` (Initial) $\rightarrow$ `a1b2c3d4e5f6` $\rightarrow$ `b2c3d4e5f6g7` $\rightarrow$ `d4e5f6g7h8i9` $\rightarrow$ `e5f6g7h8i9j0` $\rightarrow$ `f6g7h8i9j0k1` $\rightarrow$ `j0k1l2m3n4o5` $\rightarrow$ `l2m3n4o5p6q7` $\rightarrow$ `m3n4o5p6q7r8` $\rightarrow$ `n4o5p6q7r8s9`
+- **Migration History**: `f2850ec5859c` (Initial) $\rightarrow$ `a1b2c3d4e5f6` $\rightarrow$ `b2c3d4e5f6g7` $\rightarrow$ `d4e5f6g7h8i9` $\rightarrow$ `e5f6g7h8i9j0` $\rightarrow$ `f6g7h8i9j0k1` $\rightarrow$ `j0k1l2m3n4o5` $\rightarrow$ `l2m3n4o5p6q7` $\rightarrow$ `m3n4o5p6q7r8` $\rightarrow$ `n4o5p6q7r8s9` $\rightarrow$ `q7r8s9t0u1v2`
 
 | Column Name | Data Type | Nullable | Default | Constraints & Checks |
 |---|---|---|---|---|
@@ -120,6 +122,9 @@ The database comprises **6 application tables** (plus Alembic's internal `alembi
 | `employee_code` | `VARCHAR` | Yes | `NULL` | **UNIQUE** (`uq_users_employee_code`), `CHECK (employee_code IS NULL OR employee_code ~ '^[0-9]{10}$')` |
 | `is_email_verified`| `BOOLEAN` | **No** | `false` | |
 | `email_verified_at`| `TIMESTAMP WITH TIME ZONE` | Yes | `NULL` | |
+| `invitation_status`| `VARCHAR(20)` | **No** | `'ACTIVE'` | `CHECK (invitation_status IN ('PENDING', 'ACTIVE', 'REVOKED'))` (`check_invitation_status`) (added in `q7r8s9t0u1v2`) |
+| `invitation_accepted_at`| `TIMESTAMP WITH TIME ZONE` | Yes | `NULL` | Populated when pending employee accepts invite (added in `q7r8s9t0u1v2`) |
+| `tokens_valid_after`| `TIMESTAMP WITH TIME ZONE` | Yes | `NULL` | Populated on password reset / invite accept / password change to invalidate older JWTs (added in `q7r8s9t0u1v2`) |
 | `must_change_password`| `BOOLEAN` | **No** | `false` | |
 | `is_active` | `BOOLEAN` | **No** | `true` | |
 | `failed_login_attempts`| `INTEGER` | **No** | `0` | Lockout threshold: 5 |
@@ -253,6 +258,32 @@ The database comprises **6 application tables** (plus Alembic's internal `alembi
 
 ---
 
+### 3.7 Table: `user_tokens`
+- **Purpose**: Secure, single-use 48-hour employee invitation tokens and 1-hour self-serve / administrative password reset tokens.
+- **ORM Model**: `UserToken` (`app/models/user_token.py`)
+- **Migration Origin**: `alembic/versions/q7r8s9t0u1v2_slice4e_user_tokens_and_invite_fields.py`
+
+| Column Name | Data Type | Nullable | Default | Constraints & Checks |
+|---|---|---|---|---|
+| `id` | `INTEGER` | **No** | Auto-increment sequence | **PRIMARY KEY** |
+| `user_id` | `INTEGER` | **No** | None | **FOREIGN KEY** $\rightarrow$ `users.id` (`ON DELETE CASCADE`), Index: `ix_user_tokens_user_id` |
+| `token_hash` | `VARCHAR(64)` | **No** | None | **UNIQUE** (`uq_user_tokens_token_hash`), Index: `ix_user_tokens_token_hash` |
+| `token_type` | `VARCHAR(20)` | **No** | None | `CHECK (token_type IN ('INVITE', 'PASSWORD_RESET'))` (`check_user_tokens_type`) |
+| `expires_at` | `TIMESTAMP WITH TIME ZONE` | **No** | None | 48h for INVITE, 1h for PASSWORD_RESET |
+| `used_at` | `TIMESTAMP WITH TIME ZONE` | Yes | `NULL` | Populated atomically when token is consumed |
+| `created_at` | `TIMESTAMP WITH TIME ZONE` | **No** | `NOW()` | Server default |
+
+- **Indexes**:
+  - `pk_user_tokens`: Primary key on `id`.
+  - `ix_user_tokens_id`: B-tree index on `id`.
+  - `ix_user_tokens_user_id`: B-tree index on `user_id`.
+  - `ix_user_tokens_token_hash`: Unique B-tree index on `token_hash`.
+  - `ix_user_tokens_user_type_used`: Composite B-tree index on `(user_id, token_type, used_at)` for high-performance lookup of active tokens by type.
+- **Foreign Keys**:
+  - `fk_user_tokens_user_id_users`: `user_id` references `users.id` (`ON DELETE CASCADE`).
+
+---
+
 ## 4. Entity Relationships & Business Rationale
 
 ```mermaid
@@ -263,6 +294,7 @@ erDiagram
 
     users ||--o{ users : "supervises reports_to (1:N)"
     users ||--o{ email_verification_tokens : "receives (1:N)"
+    users ||--o{ user_tokens : "issued (1:N)"
     users ||--o{ tasks : "assigned_tasks (1:N)"
     users ||--o{ tasks : "created_tasks (1:N)"
     users ||--o{ tasks : "deleted_tasks (0:N)"
@@ -341,6 +373,16 @@ erDiagram
         timestamp exp_timestamp
         timestamp created_at
     }
+
+    user_tokens {
+        int id PK
+        int user_id FK
+        string token_hash UK
+        string token_type
+        timestamp expires_at
+        timestamp used_at
+        timestamp created_at
+    }
 ```
 
 ### Explanation of Relationships Based on Business Logic:
@@ -390,6 +432,7 @@ The migration chain consists of **18 linear revisions** managed via Alembic:
 | 16 | `n4o5p6q7r8s9` | `m3n4o5p6q7r8` | `n4o5p6q7r8s9_slice4c_backfill_email_verification.py` | Backfilled `is_email_verified = true` for legacy accounts |
 | 17 | `o5p6q7r8s9t0` | `n4o5p6q7r8s9` | `o5p6q7r8s9t0_add_missing_indexes_for_performance.py` | Added missing query & foreign key indexes: `ix_tasks_assigned_to`, `ix_tasks_organization_id_status`, `ix_leave_requests_employee_id`, `ix_leave_requests_organization_id_status`, `ix_users_reports_to_id` |
 | 18 | `p6q7r8s9t0u1` | `o5p6q7r8s9t0` | `p6q7r8s9t0u1_add_soft_delete_to_tasks.py` | Added soft-delete columns to `tasks` (`is_deleted`, `deleted_at`, `deleted_by`) with FK to `users.id` (`ON DELETE SET NULL`) |
+| 19 | `q7r8s9t0u1v2` | `p6q7r8s9t0u1` | `q7r8s9t0u1v2_slice4e_user_tokens_and_invite_fields.py` | Created `user_tokens` table for 48h invites & 1h resets; added `invitation_status`, `invitation_accepted_at`, and `tokens_valid_after` to `users` |
 
 ### Identified Migration Drift & Anomalies:
 1. **Critical File Misnaming Anomaly (`104551d9fda5`)**:
