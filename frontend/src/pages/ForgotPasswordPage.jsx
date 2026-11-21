@@ -53,6 +53,9 @@ export function ForgotPasswordPage() {
         }
       } else if (!err.response) {
         setServerError('Cannot reach the server. Check your connection or try again shortly.');
+      } else if (err.response.status === 422) {
+        console.error('Validation error (422) during forgot-password:', err.response.data);
+        setServerError('Please check your email address and try again.');
       } else {
         // Anti-enumeration: always display generic confirmation even on non-429 unexpected errors
         setIsSubmitted(true);

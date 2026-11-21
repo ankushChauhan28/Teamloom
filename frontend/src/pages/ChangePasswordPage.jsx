@@ -81,6 +81,9 @@ export function ChangePasswordPage() {
         setServerError(
           err.response.data?.detail || 'Incorrect current password.'
         );
+      } else if (err.response.status === 422) {
+        console.error('Validation error (422) during change-password:', err.response.data);
+        setServerError('Please check your password and try again.');
       } else if (err.response.status === 429) {
         const retryAfter = err.response.headers?.['retry-after'];
         const seconds = parseInt(retryAfter, 10);

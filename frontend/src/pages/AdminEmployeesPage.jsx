@@ -47,6 +47,10 @@ function formatApiError(err, fallback = 'Operation failed.') {
   if (status === 400) {
     return data?.detail || 'Invalid request.';
   }
+  if (status === 422) {
+    console.error('Validation error (422):', data);
+    return 'Invalid request data. Please check your input and try again.';
+  }
   return data?.detail || fallback;
 }
 
@@ -556,6 +560,13 @@ export function AdminEmployeesPage() {
       e.preventDefault();
       e.stopPropagation();
     }
+    if (employee.invitation_status?.toUpperCase() === 'REVOKED') {
+      setNotification({
+        variant: 'danger',
+        message: 'Revoked users cannot be reactivated. Issue a new invite instead.',
+      });
+      return;
+    }
     try {
       console.log(`[AdminEmployeesPage] Executing PATCH /users/${employee.id}/reactivate`);
       setNotification(null);
@@ -867,7 +878,7 @@ export function AdminEmployeesPage() {
                               </>
                             ) : emp.invitation_status === 'REVOKED' ? (
                               <span className="text-[11px] text-[var(--text-muted)] italic">
-                                Revoked
+                                Send a new invite
                               </span>
                             ) : isActive ? (
                               <>

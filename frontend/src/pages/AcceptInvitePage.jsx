@@ -118,7 +118,7 @@ export function AcceptInvitePage() {
     } catch (err) {
       if (!err.response) {
         setServerError('Cannot reach the server. Check your connection or try again shortly.');
-      } else if (err.response.status === 400) {
+      } else if (err.response.status === 400 || err.response.status === 404) {
         const detail = err.response.data?.detail;
         if (
           typeof detail === 'string' &&
@@ -132,6 +132,9 @@ export function AcceptInvitePage() {
         } else {
           setServerError(GENERIC_INVITE_ERROR);
         }
+      } else if (err.response.status === 422) {
+        console.error('Validation error (422) during accept-invite:', err.response.data);
+        setServerError('Please check your password and try again.');
       } else if (err.response.status === 429) {
         const retryAfter = err.response.headers?.['retry-after'];
         const seconds = parseInt(retryAfter, 10);
@@ -147,7 +150,7 @@ export function AcceptInvitePage() {
       } else if (err.response.status >= 500) {
         setServerError('Server error. Please try again.');
       } else {
-        setServerError(GENERIC_INVITE_ERROR);
+        setServerError('An unexpected error occurred. Please try again.');
       }
     } finally {
       setIsSubmitting(false);
