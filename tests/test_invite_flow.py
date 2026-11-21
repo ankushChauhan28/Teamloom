@@ -16,9 +16,12 @@ Covers:
 """
 
 import asyncio
+import hashlib
+import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
+import jwt
 import pytest
 from fastapi import status
 from httpx import AsyncClient
@@ -27,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.rate_limit import InMemoryRateLimiter
-from app.core.security import create_access_token, hash_password
+from app.core.security import create_access_token, create_refresh_token, hash_password
 from app.models.organization import Organization
 from app.models.user import User, UserRole
 from app.models.user_token import UserToken
@@ -579,14 +582,20 @@ async def test_reset_password_success_and_login(
 
 @pytest.mark.asyncio
 async def test_reset_password_session_invalidation(
-    client: AsyncClient, employee_user: User, employee_headers: dict[str, str], db_session: AsyncSession
+    client: AsyncClient, employee_user: User, db_session: AsyncSession
 ) -> None:
     """
     After /auth/reset-password, all existing JWT access tokens of that user
     are rejected with HTTP 401 via the tokens_valid_after check.
     """
+    # Token issued before the reset event (2 seconds prior)
+    old_access = _make_token_at(
+        employee_user.email, employee_user.role.value, datetime.now(UTC) - timedelta(seconds=2), "access"
+    )
+    headers = {"Authorization": f"Bearer {old_access}"}
+
     # Verify current token works
-    pre_res = await client.get("/users/me", headers=employee_headers)
+    pre_res = await client.get("/users/me", headers=headers)
     assert pre_res.status_code == status.HTTP_200_OK
 
     # Generate token and reset password
@@ -601,9 +610,196 @@ async def test_reset_password_session_invalidation(
     )
 
     # Old access token must now be rejected
-    post_res = await client.get("/users/me", headers=employee_headers)
+    post_res = await client.get("/users/me", headers=headers)
     assert post_res.status_code == status.HTTP_401_UNAUTHORIZED
     assert "revoked" in post_res.json()["detail"].lower()
+
+
+def _make_token_at(email: str, role: str, iat_dt: datetime, token_type: str = "access") -> str:
+    secret = settings.JWT_SECRET_KEY if token_type == "access" else settings.JWT_REFRESH_SECRET_KEY
+    to_encode = {
+        "sub": email,
+        "role": role,
+        "type": token_type,
+        "jti": str(uuid.uuid4()),
+        "iat": int(iat_dt.timestamp()),
+        "exp": int((datetime.now(UTC) + timedelta(hours=2)).timestamp()),
+    }
+    return jwt.encode(to_encode, secret, algorithm="HS256")
+
+
+@pytest.mark.asyncio
+async def test_session_invalidation_same_second_precision_after_reset_password(
+    client: AsyncClient, employee_user: User, db_session: AsyncSession
+) -> None:
+    """
+    Proves whole-second granularity handling after /auth/reset-password:
+    - Token issued BEFORE event is rejected for access and refresh.
+    - Token issued in the SAME SECOND immediately afterwards works for access and refresh.
+    """
+    now = datetime.now(UTC)
+    t_before = now - timedelta(seconds=10)
+    t_event = now.replace(microsecond=500000)   # 12:00:00.500000
+    t_after = now.replace(microsecond=800000)   # 12:00:00.800000 (same whole second: 12:00:00)
+
+    old_access = _make_token_at(employee_user.email, employee_user.role.value, t_before, "access")
+    old_refresh = _make_token_at(employee_user.email, employee_user.role.value, t_before, "refresh")
+
+    # Sanity check: old access works before event
+    ok_res = await client.get("/users/me", headers={"Authorization": f"Bearer {old_access}"})
+    assert ok_res.status_code == status.HTTP_200_OK
+
+    raw_token = await token_service.generate_user_token(
+        db=db_session, user_id=employee_user.id, token_type="PASSWORD_RESET", expire_hours=1
+    )
+    await db_session.commit()
+
+    # Call reset password
+    reset_res = await client.post(
+        "/auth/reset-password",
+        json={"token": raw_token, "new_password": "NewSameSecondPass123!"},
+    )
+    assert reset_res.status_code == status.HTTP_200_OK
+
+    # Manually set tokens_valid_after with microseconds to simulate reset at t_event
+    employee_user.tokens_valid_after = t_event
+    await db_session.commit()
+
+    # New tokens issued at t_after (same whole second)
+    new_access = _make_token_at(employee_user.email, employee_user.role.value, t_after, "access")
+    new_refresh = _make_token_at(employee_user.email, employee_user.role.value, t_after, "refresh")
+
+    # 1. Old tokens must be rejected
+    old_acc_res = await client.get("/users/me", headers={"Authorization": f"Bearer {old_access}"})
+    assert old_acc_res.status_code == status.HTTP_401_UNAUTHORIZED
+    assert "revoked" in old_acc_res.json()["detail"].lower()
+
+    old_ref_res = await client.post("/auth/refresh", cookies={"refresh_token": old_refresh})
+    assert old_ref_res.status_code == status.HTTP_401_UNAUTHORIZED
+    assert "revoked" in old_ref_res.json()["detail"].lower()
+
+    # 2. New tokens issued in the same second MUST WORK
+    new_acc_res = await client.get("/users/me", headers={"Authorization": f"Bearer {new_access}"})
+    assert new_acc_res.status_code == status.HTTP_200_OK
+    assert new_acc_res.json()["email"] == employee_user.email
+
+    new_ref_res = await client.post("/auth/refresh", cookies={"refresh_token": new_refresh})
+    assert new_ref_res.status_code == status.HTTP_200_OK
+    assert "access_token" in new_ref_res.json()
+
+
+@pytest.mark.asyncio
+async def test_session_invalidation_same_second_precision_after_accept_invite(
+    client: AsyncClient, admin_headers: dict[str, str], db_session: AsyncSession
+) -> None:
+    """
+    Proves whole-second granularity handling after /auth/accept-invite:
+    Tokens issued in the same second immediately after accept-invite work for access and refresh.
+    """
+    now = datetime.now(UTC)
+    t_before = now - timedelta(seconds=10)
+    t_event = now.replace(microsecond=450000)   # 14:00:00.450000
+    t_after = now.replace(microsecond=750000)   # 14:00:00.750000 (same second)
+
+    captured_tokens = []
+    with patch(
+        "app.routes.users.send_invite_email",
+        side_effect=lambda email, full_name, employee_code, token, **kw: captured_tokens.append(token) or True,
+    ):
+        create_res = await client.post(
+            "/users/employees",
+            json={"full_name": "Invite Precision", "email": "invite.precision@example.com"},
+            headers=admin_headers,
+        )
+    user_id = create_res.json()["id"]
+    raw_token = captured_tokens[0]
+
+    old_access = _make_token_at("invite.precision@example.com", "EMPLOYEE", t_before, "access")
+    old_refresh = _make_token_at("invite.precision@example.com", "EMPLOYEE", t_before, "refresh")
+
+    # Accept invite
+    accept_res = await client.post(
+        "/auth/accept-invite",
+        json={"token": raw_token, "password": "NewSameSecondPass123!"},
+    )
+    assert accept_res.status_code == status.HTTP_200_OK
+
+    # Simulate tokens_valid_after having microseconds at t_event
+    user = await db_session.get(User, user_id)
+    user.tokens_valid_after = t_event
+    await db_session.commit()
+
+    new_access = _make_token_at("invite.precision@example.com", "EMPLOYEE", t_after, "access")
+    new_refresh = _make_token_at("invite.precision@example.com", "EMPLOYEE", t_after, "refresh")
+
+    # Old tokens rejected
+    old_acc_res = await client.get("/users/me", headers={"Authorization": f"Bearer {old_access}"})
+    assert old_acc_res.status_code == status.HTTP_401_UNAUTHORIZED
+
+    old_ref_res = await client.post("/auth/refresh", cookies={"refresh_token": old_refresh})
+    assert old_ref_res.status_code == status.HTTP_401_UNAUTHORIZED
+
+    # New tokens valid
+    new_acc_res = await client.get("/users/me", headers={"Authorization": f"Bearer {new_access}"})
+    assert new_acc_res.status_code == status.HTTP_200_OK
+
+    new_ref_res = await client.post("/auth/refresh", cookies={"refresh_token": new_refresh})
+    assert new_ref_res.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.asyncio
+async def test_session_invalidation_same_second_precision_after_change_password(
+    client: AsyncClient, employee_user: User, db_session: AsyncSession
+) -> None:
+    """
+    Proves whole-second granularity handling after /auth/change-password:
+    - Tokens issued before event are rejected.
+    - Tokens issued in the same second immediately after change-password work for access and refresh.
+    """
+    now = datetime.now(UTC)
+    t_before = now - timedelta(seconds=15)
+    t_event = now.replace(microsecond=400000)   # 16:00:00.400000
+    t_after = now.replace(microsecond=700000)   # 16:00:00.700000 (same second!)
+
+    employee_user.hashed_password = hash_password("CurrentPassword123!")
+    await db_session.commit()
+
+    old_access = _make_token_at(employee_user.email, employee_user.role.value, t_before, "access")
+    old_refresh = _make_token_at(employee_user.email, employee_user.role.value, t_before, "refresh")
+
+    # Sanity check
+    ok_res = await client.get("/users/me", headers={"Authorization": f"Bearer {old_access}"})
+    assert ok_res.status_code == status.HTTP_200_OK
+
+    # Call change-password with old_access
+    change_res = await client.post(
+        "/auth/change-password",
+        json={"current_password": "CurrentPassword123!", "new_password": "ChangedPass123!"},
+        headers={"Authorization": f"Bearer {old_access}"},
+    )
+    assert change_res.status_code == status.HTTP_200_OK
+
+    # Simulate tokens_valid_after having microseconds at t_event (to explicitly verify whole-second flooring)
+    employee_user.tokens_valid_after = t_event
+    await db_session.commit()
+
+    new_access = _make_token_at(employee_user.email, employee_user.role.value, t_after, "access")
+    new_refresh = _make_token_at(employee_user.email, employee_user.role.value, t_after, "refresh")
+
+    # Old tokens rejected
+    old_acc_res = await client.get("/users/me", headers={"Authorization": f"Bearer {old_access}"})
+    assert old_acc_res.status_code == status.HTTP_401_UNAUTHORIZED
+
+    old_ref_res = await client.post("/auth/refresh", cookies={"refresh_token": old_refresh})
+    assert old_ref_res.status_code == status.HTTP_401_UNAUTHORIZED
+
+    # New tokens valid
+    new_acc_res = await client.get("/users/me", headers={"Authorization": f"Bearer {new_access}"})
+    assert new_acc_res.status_code == status.HTTP_200_OK
+
+    new_ref_res = await client.post("/auth/refresh", cookies={"refresh_token": new_refresh})
+    assert new_ref_res.status_code == status.HTTP_200_OK
+
 
 
 @pytest.mark.asyncio
@@ -680,6 +876,63 @@ async def test_pending_user_cannot_be_chosen_as_supervisor(
     )
     assert res.status_code == status.HTTP_400_BAD_REQUEST
     assert "pending" in res.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_pending_user_cannot_be_reassignment_target(
+    client: AsyncClient, admin_headers: dict[str, str], db_session: AsyncSession
+) -> None:
+    """
+    Attempting to reassign subordinates to a PENDING employee during supervisor deactivation
+    returns HTTP 400 Bad Request.
+    """
+    # 1. Create supervisor and activate
+    sup_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Sup For Deact", "email": "sup.deact@example.com"},
+        headers=admin_headers,
+    )
+    sup_id = sup_res.json()["id"]
+    sup_user = await db_session.get(User, sup_id)
+    sup_user.invitation_status = "ACTIVE"
+    await db_session.commit()
+
+    # 2. Create subordinate reporting to supervisor and activate
+    rep_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Report User", "email": "rep.deact@example.com", "reports_to_id": sup_id},
+        headers=admin_headers,
+    )
+    rep_id = rep_res.json()["id"]
+    rep_user = await db_session.get(User, rep_id)
+    rep_user.invitation_status = "ACTIVE"
+    await db_session.commit()
+
+    # 3. Create pending employee
+    pending_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Pending Target", "email": "pending.target@example.com"},
+        headers=admin_headers,
+    )
+    pending_id = pending_res.json()["id"]
+
+    # 4. Attempt deactivation assigning subordinate to pending employee via default_new_manager_id
+    res_default = await client.patch(
+        f"/users/{sup_id}/deactivate",
+        json={"default_new_manager_id": pending_id},
+        headers=admin_headers,
+    )
+    assert res_default.status_code == status.HTTP_400_BAD_REQUEST
+    assert "pending" in res_default.json()["detail"].lower()
+
+    # 5. Attempt deactivation assigning subordinate to pending employee via explicit mapping
+    res_explicit = await client.patch(
+        f"/users/{sup_id}/deactivate",
+        json={"reassignments": {str(rep_id): pending_id}},
+        headers=admin_headers,
+    )
+    assert res_explicit.status_code == status.HTTP_400_BAD_REQUEST
+    assert "pending" in res_explicit.json()["detail"].lower()
 
 
 # ===========================================================================
@@ -792,3 +1045,155 @@ async def test_concurrent_token_consumption_atomic(
     status_codes = [res1.status_code, res2.status_code]
     assert status.HTTP_200_OK in status_codes
     assert status.HTTP_400_BAD_REQUEST in status_codes
+
+
+@pytest.mark.asyncio
+async def test_weak_password_leaves_token_usable_for_invite_and_reset(
+    client: AsyncClient, admin_headers: dict[str, str], employee_user: User, db_session: AsyncSession
+) -> None:
+    """
+    Verifies that when a weak password is provided:
+    1. Password validation fails (HTTP 400).
+    2. The token is NOT consumed (used_at remains NULL).
+    3. The same token remains fully usable with a valid password.
+    Tests both /auth/accept-invite (INVITE) and /auth/reset-password (PASSWORD_RESET).
+    """
+    # 1. INVITE token with weak password
+    captured_tokens = []
+    with patch(
+        "app.routes.users.send_invite_email",
+        side_effect=lambda email, full_name, employee_code, token, **kw: captured_tokens.append(token) or True,
+    ):
+        await client.post(
+            "/users/employees",
+            json={"full_name": "Weak Pass Invite", "email": "weak.pass.invite@example.com"},
+            headers=admin_headers,
+        )
+    invite_raw_token = captured_tokens[0]
+
+    # Attempt with weak password (< 8 chars)
+    weak_invite_res = await client.post(
+        "/auth/accept-invite",
+        json={"token": invite_raw_token, "password": "weak"},
+    )
+    assert weak_invite_res.status_code == status.HTTP_400_BAD_REQUEST
+    assert "password" in weak_invite_res.json()["detail"].lower()
+
+    # Verify token is still unconsumed in database
+    hashed_invite = hashlib.sha256(invite_raw_token.encode("utf-8")).hexdigest()
+    invite_record = (
+        await db_session.execute(select(UserToken).where(UserToken.token_hash == hashed_invite))
+    ).scalar_one()
+    assert invite_record.used_at is None
+
+    # Now succeed with strong password
+    strong_invite_res = await client.post(
+        "/auth/accept-invite",
+        json={"token": invite_raw_token, "password": "StrongPassword123!"},
+    )
+    assert strong_invite_res.status_code == status.HTTP_200_OK
+
+    await db_session.refresh(invite_record)
+    assert invite_record.used_at is not None
+
+    # 2. PASSWORD_RESET token with weak password
+    reset_raw_token = await token_service.generate_user_token(
+        db=db_session, user_id=employee_user.id, token_type="PASSWORD_RESET", expire_hours=1
+    )
+    await db_session.commit()
+
+    # Attempt with weak password
+    weak_reset_res = await client.post(
+        "/auth/reset-password",
+        json={"token": reset_raw_token, "new_password": "123"},
+    )
+    assert weak_reset_res.status_code == status.HTTP_400_BAD_REQUEST
+    assert "password" in weak_reset_res.json()["detail"].lower()
+
+    # Verify token is still unconsumed in database
+    hashed_reset = hashlib.sha256(reset_raw_token.encode("utf-8")).hexdigest()
+    reset_record = (
+        await db_session.execute(select(UserToken).where(UserToken.token_hash == hashed_reset))
+    ).scalar_one()
+    assert reset_record.used_at is None
+
+    # Now succeed with strong password
+    strong_reset_res = await client.post(
+        "/auth/reset-password",
+        json={"token": reset_raw_token, "new_password": "NewStrongPass123!"},
+    )
+    assert strong_reset_res.status_code == status.HTTP_200_OK
+
+    await db_session.refresh(reset_record)
+    assert reset_record.used_at is not None
+
+
+@pytest.mark.asyncio
+async def test_deactivate_supervisor_with_pending_direct_report_requires_reassignment(
+    client: AsyncClient, admin_headers: dict[str, str], db_session: AsyncSession
+) -> None:
+    """
+    Verifies that an invited employee who is still PENDING (is_active=True, invitation_status='PENDING')
+    is included in subordinates requiring reassignment when deactivating their supervisor.
+    - If deactivation is attempted without reassignments, returns HTTP 409 Conflict with the pending
+      employee id in unresolved_subordinates.
+    - When reassigned (e.g. default_new_manager_id=None), deactivation succeeds with HTTP 200,
+      and the pending employee's reports_to_id is updated while remaining PENDING.
+    """
+    # 1. Create and activate a supervisor
+    sup_res = await client.post(
+        "/users/employees",
+        json={"full_name": "Pending Sup Boss", "email": "pending.sup.boss@example.com"},
+        headers=admin_headers,
+    )
+    assert sup_res.status_code == status.HTTP_201_CREATED
+    sup_id = sup_res.json()["id"]
+    sup_user = await db_session.get(User, sup_id)
+    sup_user.invitation_status = "ACTIVE"
+    sup_user.is_email_verified = True
+    sup_user.hashed_password = hash_password("ValidPassword123!")
+    await db_session.commit()
+
+    # 2. Create a pending employee reporting to this supervisor
+    pending_res = await client.post(
+        "/users/employees",
+        json={
+            "full_name": "Pending Direct Report",
+            "email": "pending.direct.report@example.com",
+            "reports_to_id": sup_id,
+        },
+        headers=admin_headers,
+    )
+    assert pending_res.status_code == status.HTTP_201_CREATED
+    pending_id = pending_res.json()["id"]
+    assert pending_res.json()["invitation_status"] == "PENDING"
+    assert pending_res.json()["reports_to_id"] == sup_id
+
+    # 3. Attempt supervisor deactivation with empty body -> must return 409 Conflict
+    deact_fail_res = await client.patch(
+        f"/users/{sup_id}/deactivate",
+        json={},
+        headers=admin_headers,
+    )
+    assert deact_fail_res.status_code == status.HTTP_409_CONFLICT
+    err_data = deact_fail_res.json()
+    unresolved_ids = {u["id"] for u in err_data["unresolved_subordinates"]}
+    assert pending_id in unresolved_ids
+
+    # 4. Resolve reassignment by setting default_new_manager_id=None
+    deact_ok_res = await client.patch(
+        f"/users/{sup_id}/deactivate",
+        json={"default_new_manager_id": None},
+        headers=admin_headers,
+    )
+    assert deact_ok_res.status_code == status.HTTP_200_OK
+
+    # 5. Verify supervisor is inactive, pending employee has reports_to_id=None and stays PENDING
+    pending_user = await db_session.get(User, pending_id)
+    assert pending_user.reports_to_id is None
+    assert pending_user.invitation_status == "PENDING"
+    assert pending_user.is_active is True
+
+    await db_session.refresh(sup_user)
+    assert sup_user.is_active is False
+

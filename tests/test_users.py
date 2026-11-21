@@ -592,6 +592,14 @@ async def test_deactivate_supervisor_invalid_managers_rejected(
     await _activate_user(db_session, inact_id)
     await client.patch(f"/users/{inact_id}/deactivate", headers=admin_headers)
 
+    res_inact = await client.patch(
+        f"/users/{sup_id}/deactivate",
+        json={"default_new_manager_id": inact_id},
+        headers=admin_headers,
+    )
+    assert res_inact.status_code == status.HTTP_400_BAD_REQUEST
+    assert "inactive" in res_inact.json()["detail"].lower()
+
     # 3. Target user being deactivated as manager -> 400
     res_self_sup = await client.patch(
         f"/users/{sup_id}/deactivate",
