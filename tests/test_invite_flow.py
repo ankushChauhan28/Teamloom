@@ -1011,6 +1011,157 @@ async def test_accept_invite_rate_limit(
         original_limiter.reset()
 
 
+@pytest.mark.asyncio
+async def test_reset_password_rate_limit(
+    client: AsyncClient,
+) -> None:
+    """
+    Tests reset-password IP rate limiting (10 attempts / 15 min).
+    """
+    fake_time = [300000.0]
+
+    def fake_clock():
+        return fake_time[0]
+
+    from app.core import rate_limit as rl_module
+    custom_limiter = InMemoryRateLimiter(clock=fake_clock)
+    original_limiter = rl_module._limiter_instance
+    rl_module._limiter_instance = custom_limiter
+
+    try:
+        for i in range(settings.RESET_PASSWORD_IP_LIMIT):
+            res = await client.post(
+                "/auth/reset-password", json={"token": f"token_{i}", "new_password": "NewPassword123!"}
+            )
+            assert res.status_code in (status.HTTP_400_BAD_REQUEST, status.HTTP_200_OK)
+
+        # 11th request: 429 Too Many Requests
+        blocked = await client.post(
+            "/auth/reset-password", json={"token": "token_exceeded", "new_password": "NewPassword123!"}
+        )
+        assert blocked.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+        assert "Retry-After" in blocked.headers
+
+        # Fast forward past window
+        fake_time[0] += settings.RESET_PASSWORD_IP_WINDOW + 1
+        res_after = await client.post(
+            "/auth/reset-password", json={"token": "token_after", "new_password": "NewPassword123!"}
+        )
+        assert res_after.status_code == status.HTTP_400_BAD_REQUEST
+    finally:
+        rl_module._limiter_instance = original_limiter
+        original_limiter.reset()
+
+
+@pytest.mark.asyncio
+async def test_invite_creation_rate_limit(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """
+    Tests invite creation rate limit per admin (30 invitations / hour).
+    """
+    fake_time = [400000.0]
+
+    def fake_clock():
+        return fake_time[0]
+
+    from app.core import rate_limit as rl_module
+    custom_limiter = InMemoryRateLimiter(clock=fake_clock)
+    original_limiter = rl_module._limiter_instance
+    rl_module._limiter_instance = custom_limiter
+
+    try:
+        for i in range(settings.INVITE_RATE_LIMIT_PER_ADMIN):
+            res = await client.post(
+                "/users/employees",
+                json={"full_name": f"Admin Invite {i}", "email": f"admin.invite.{i}@example.com"},
+                headers=admin_headers,
+            )
+            assert res.status_code == status.HTTP_201_CREATED
+
+        # 31st invitation exceeds admin limit
+        blocked = await client.post(
+            "/users/employees",
+            json={"full_name": "Admin Invite Overflow", "email": "admin.invite.overflow@example.com"},
+            headers=admin_headers,
+        )
+        assert blocked.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+        assert "Too many invitations sent." in blocked.json()["detail"]
+    finally:
+        rl_module._limiter_instance = original_limiter
+        original_limiter.reset()
+
+
+@pytest.mark.asyncio
+async def test_resend_invite_rate_limits(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    """
+    Tests resend-invite rate limits: per target user (3/hr) and per admin (30/hr).
+    """
+    fake_time = [500000.0]
+
+    def fake_clock():
+        return fake_time[0]
+
+    from app.core import rate_limit as rl_module
+    custom_limiter = InMemoryRateLimiter(clock=fake_clock)
+    original_limiter = rl_module._limiter_instance
+    rl_module._limiter_instance = custom_limiter
+
+    try:
+        # Create pending user
+        create_res = await client.post(
+            "/users/employees",
+            json={"full_name": "Resend RL User", "email": "resend.rl@example.com"},
+            headers=admin_headers,
+        )
+        user_id = create_res.json()["id"]
+
+        # Resend 3 times successfully
+        for _ in range(settings.RESEND_INVITE_PER_USER_LIMIT):
+            res = await client.post(f"/users/{user_id}/resend-invite", headers=admin_headers)
+            assert res.status_code == status.HTTP_200_OK
+
+        # 4th resend on same user hits user limit
+        blocked = await client.post(f"/users/{user_id}/resend-invite", headers=admin_headers)
+        assert blocked.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+        assert "for this user" in blocked.json()["detail"].lower()
+    finally:
+        rl_module._limiter_instance = original_limiter
+        original_limiter.reset()
+
+
+@pytest.mark.asyncio
+async def test_send_password_reset_rate_limit(
+    client: AsyncClient, admin_headers: dict[str, str], employee_user: User
+) -> None:
+    """
+    Tests send-password-reset rate limits per target user (5/hr).
+    """
+    fake_time = [600000.0]
+
+    def fake_clock():
+        return fake_time[0]
+
+    from app.core import rate_limit as rl_module
+    custom_limiter = InMemoryRateLimiter(clock=fake_clock)
+    original_limiter = rl_module._limiter_instance
+    rl_module._limiter_instance = custom_limiter
+
+    try:
+        for _ in range(settings.SEND_RESET_PER_USER_LIMIT):
+            res = await client.post(f"/users/{employee_user.id}/send-password-reset", headers=admin_headers)
+            assert res.status_code == status.HTTP_200_OK
+
+        blocked = await client.post(f"/users/{employee_user.id}/send-password-reset", headers=admin_headers)
+        assert blocked.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+        assert "for this user" in blocked.json()["detail"].lower()
+    finally:
+        rl_module._limiter_instance = original_limiter
+        original_limiter.reset()
+
+
 # ===========================================================================
 # 6. Concurrency & Race Condition Safety
 # ===========================================================================
