@@ -116,10 +116,17 @@ export function AdminTasksPage() {
     setTasks((prev) => prev.filter((t) => t.id !== deletedTaskId));
   };
 
-  const employeeOptions = employees.map((emp) => ({
-    value: String(emp.id),
-    label: emp.full_name,
-  }));
+  const employeeOptions = employees
+    .filter(
+      (emp) =>
+        emp.is_active !== false &&
+        emp.invitation_status !== 'PENDING' &&
+        emp.invitation_status !== 'REVOKED'
+    )
+    .map((emp) => ({
+      value: String(emp.id),
+      label: emp.full_name,
+    }));
 
   return (
     <div className="min-h-screen bg-[var(--bg-page)] text-[var(--text-primary)] flex flex-col">

@@ -53,6 +53,7 @@ frontend/
 │   │   │   ├── EmptyState.jsx      # Placeholder banner with icon, title, description, and action button
 │   │   │   ├── Input.jsx           # Text/password input field with validation error state and password visibility toggle
 │   │   │   ├── Modal.jsx           # Centered modal dialog wrapper with backdrop and escape/close triggers
+│   │   │   ├── PasswordChecklist.jsx # Live password complexity checklist (length, upper, lower, digit, special)
 │   │   │   ├── Select.jsx          # Styled native select dropdown component
 │   │   │   ├── Spinner.jsx         # SVG loading spinner indicator (sm, md, lg sizes)
 │   │   │   └── Textarea.jsx        # Multi-line text input field with error messaging
@@ -67,18 +68,22 @@ frontend/
 │   │   └── TaskList.jsx            # Responsive employee task grid with filter controls and conflict reload handling
 │   ├── lib/
 │   │   ├── api.js                  # Axios client configuration with JWT injection and silent 401 refresh handler
-│   │   └── dateUtils.js            # Date/datetime formatting helpers (ISO, local format, datetime-local input)
+│   │   ├── dateUtils.js            # Date/datetime formatting helpers (ISO, local format, datetime-local input)
+│   │   └── passwordUtils.js        # Password complexity validation and special character regex rules
 │   ├── pages/                      # Page view containers
+│   │   ├── AcceptInvitePage.jsx    # Public set-password & invite activation page (/accept-invite?token=...)
 │   │   ├── AdminEmployeesPage.jsx  # System-wide employee management directory for administrators (/admin/employees)
 │   │   ├── AdminLeavesPage.jsx     # System-wide leave approval hub for administrators (/admin/leaves)
 │   │   ├── AdminPerformancePage.jsx# System-wide employee performance analytics and metric leaderboard (/admin/performance)
 │   │   ├── AdminTasksPage.jsx      # System-wide task control panel with 10s auto-polling (/admin/tasks)
 │   │   ├── ChangePasswordPage.jsx  # Forced or voluntary password update page (/change-password)
 │   │   ├── DashboardPage.jsx       # Employee personal task management dashboard (/dashboard)
+│   │   ├── ForgotPasswordPage.jsx  # Public self-serve password reset request page (/forgot-password)
 │   │   ├── LeavesPage.jsx          # Employee personal leave request portal (/leaves)
 │   │   ├── LoginPage.jsx           # Dual-mode login page (Admin email / Employee User ID) (/login)
 │   │   ├── MyPerformancePage.jsx   # Employee personal performance analytics page (/my-performance)
 │   │   ├── MyTeamPage.jsx          # Manager direct report roster, team tasks, team leaves view, and analytics (/my-team)
+│   │   ├── ResetPasswordPage.jsx   # Public single-use password reset completion page (/reset-password?token=...)
 │   │   ├── SignupPage.jsx          # Self-serve organization & admin registration page (/signup)
 │   │   └── VerifyEmailPage.jsx     # Single-use email verification token confirmation page (/verify-email)
 │   ├── store/
@@ -147,17 +152,20 @@ The application implements a bespoke dark theme named **"Deep Pine"**, defined v
 
 | Route | Page Component | Guard / Access Level | Purpose & Rendered Content |
 |---|---|---|---|
-| `/login` | `LoginPage` | Public | Dual-mode login interface (Admin mode: email; Employee mode: 10-digit User ID) with password field clearing on mode switch, unverified admin resend helper on 401, signup link, and automatic post-login redirection. |
+| `/login` | `LoginPage` | Public | Dual-mode login interface (Admin mode: email; Employee mode: 10-digit User ID) with password field clearing on mode switch, "Forgot password?" links, flash messages (`location.state.message`), unverified admin resend helper on 401, signup link, and automatic post-login redirection. |
 | `/signup` | `SignupPage` | Public | Self-serve organization and admin registration (company name, full name, email, password, confirm password) with client/server validation, 201 "Check your email" confirmation view, resend verification trigger, and anti-enumeration protection. |
 | `/verify-email` | `VerifyEmailPage` | Public | Single-use email verification landing page that executes `POST /auth/verify-email` with token query parameter, featuring React StrictMode double-effect protection, loading spinner, success state, and invalid/expired fallback with resend verification form. |
-| `/change-password` | `ChangePasswordPage` | `PasswordChangeRoute` | Password update screen for both newly provisioned employees (`must_change_password=True`) and voluntary updates via UserMenu; captures initial flow on mount to prevent layout/content flashing before navigation. |
+| `/accept-invite` | `AcceptInvitePage` | Public | Single-use employee invite activation landing page executing `POST /auth/accept-invite` with `token` parameter, password + confirm inputs with live strength checklist, success state linking to login, and generic invalid/expired error handling. |
+| `/forgot-password` | `ForgotPasswordPage` | Public | Self-serve password reset request page executing `POST /auth/forgot-password` with email, always displaying anti-enumeration generic confirmation guidance and rate-limit handling. |
+| `/reset-password` | `ResetPasswordPage` | Public | Single-use password reset landing page executing `POST /auth/reset-password` with `token` parameter, live strength checklist, success state linking to login, and generic invalid/expired error handling. |
+| `/change-password` | `ChangePasswordPage` | `PasswordChangeRoute` | Password update screen for both newly provisioned employees (`must_change_password=True`) and voluntary updates via UserMenu; enforces live password strength checklist and redirects to `/login` upon session invalidation. |
 | `/dashboard` | `DashboardPage` | `ProtectedRoute` | Main employee dashboard displaying session status banner, user profile hero card, and the `TaskList` task board. |
 | `/leaves` | `LeavesPage` | `ProtectedRoute` | Employee self-service leave portal rendering `LeaveForm` submission card and `LeaveHistoryList` timeline. |
 | `/my-performance` | `MyPerformancePage` | `ProtectedRoute` (Hidden for Admin) | Personal performance analytics dashboard rendering `PerformanceRing` on-time circular gauge, metric count cards, and `MilestoneTrail`. |
 | `/my-team` | `MyTeamPage` | `DirectReportsRoute` (Direct Managers & Admin) | Team management workspace rendering direct reports roster chips, tabbed team tasks table, tabbed team leaves view (all statuses), and team/individual performance analytics. |
 | `/admin/tasks` | `AdminTasksPage` | `AdminRoute` (Tier 1 Admin) | System-wide task table with 10-second background auto-polling, status/priority/assignee filters, and task management modals. |
 | `/admin/leaves` | `AdminLeavesPage` | `AdminRoute` (Tier 1 Admin) | System-wide leave approval table with status filter, inline one-click approve, and `LeaveRejectModal` for rejection. (Leave approval is strictly Admin-only). |
-| `/admin/employees` | `AdminEmployeesPage` | `AdminRoute` (Tier 1 Admin) | System-wide employee directory showing codes, designations, reporting relationships, search filter, and `EmployeeFormModal` for provisioning new employees. |
+| `/admin/employees` | `AdminEmployeesPage` | `AdminRoute` (Tier 1 Admin) | System-wide employee directory showing codes, designations, reporting relationships, invitation status badges (`Active`, `Invite pending`, `Revoked`), invite actions (Resend invite, Revoke invite), password reset trigger, and `EmployeeFormModal`. |
 | `/admin/performance` | `AdminPerformancePage` | `AdminRoute` (Tier 1 Admin) | System-wide performance analytics dashboard with company overview ring, distribution breakdown, and individual employee performance cards. |
 | `/` | `RootRedirect` | Dynamic Redirect | Routes unauthenticated users to `/login`, users with `must_change_password=True` to `/change-password`, Admin to `/admin/tasks`, and Employee to `/dashboard`. |
 
@@ -211,10 +219,32 @@ The application implements a bespoke dark theme named **"Deep Pine"**, defined v
 - If a conflict occurs during an inline stepper change, `TaskList` catches the 409 error and re-fetches the task list to align with server state.
 - Once a task reaches `COMPLETED`, it is immutable: controls are disabled with a tooltip indicating completion.
 
-### 5.8 `ChangePasswordPage` Feedback, Flash Prevention & Navigation Flow
+### 5.8 `ChangePasswordPage` Session Invalidation & Feedback
 - Supports both forced password change on first login and voluntary password updates initiated from `UserMenu`.
-- **Flash Prevention**: Stably captures `isForcedFlow` state on initial component mount via `useState(() => Boolean(user?.must_change_password))`. When `authStore.changePassword()` clears `user.must_change_password` to `false`, the layout, header icon (`ShieldAlert` vs `KeyRound`), Back button visibility, and "Sign out" footer remain perfectly steady during the 1200ms success alert delay prior to `navigate()`.
-- **Double Submit Guard**: Form fields and buttons are disabled during active submission and post-success countdown.
+- **Live Strength Validation**: Integrates `PasswordChecklist` enforcing 8+ characters, uppercase, lowercase, digit, and special character requirements.
+- **Session Revocation Handling**: Following `POST /auth/change-password`, the backend revokes the user's active session (`tokens_valid_after`). The frontend clears in-memory auth state via `authStore.clearAuth()` and redirects to `/login` with flash message `"Password changed, please log in again."`.
+
+### 5.9 `AcceptInvitePage` & `ResetPasswordPage` Token Consumption & Strength Checklist
+- Both `/accept-invite?token=...` and `/reset-password?token=...` read the token query parameter on mount.
+- **Missing or Invalid Token Handling**: Missing, invalid, expired, or reused tokens display one generic friendly error alert:
+  - Invites: *"This link is invalid or has expired. Ask your admin to resend the invite"*
+  - Resets: *"This link is invalid or has expired. Please request a new reset link."* (with direct action link to `/forgot-password`).
+- **Interactive Strength Checklist**: Renders dynamic check indicators confirming all 5 complexity criteria as the user types.
+- **Success State**: Successful activation or reset presents a clear confirmation card with action button routing to `/login`.
+
+### 5.10 `ForgotPasswordPage` Anti-Enumeration & Rate Limiting
+- Public interface accepting an email address to dispatch a password recovery link (`POST /auth/forgot-password`).
+- Anti-enumeration defense: always transitions to a generic confirmation view (*"If an account with that email exists, a password reset link has been sent."*), preventing account harvesting.
+- Respects HTTP 429 rate limiting with parsed `Retry-After` display.
+
+### 5.11 `AdminEmployeesPage` Roster Invitations & Status Badging
+- Replaced temporary password provisioning with automated 48-hour expiring invite links (`POST /users/employees`).
+- Status column renders real-time badges derived from `invitation_status`:
+  - `PENDING` $\rightarrow$ Amber `Invite pending` badge with **Resend invite** and **Revoke invite** action buttons.
+  - `ACTIVE` $\rightarrow$ Emerald `Active` badge with **Supervisor**, **Send password reset link**, and **Remove** action buttons.
+  - `REVOKED` $\rightarrow$ Slate `Revoked` badge.
+  - Deactivated $\rightarrow$ Slate `Removed` badge with **Restore** action.
+- Excludes `PENDING` and `REVOKED` users from manager and assignee dropdowns across the application.
 
 ---
 

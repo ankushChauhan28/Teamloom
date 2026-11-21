@@ -6,6 +6,8 @@ import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { Alert } from '../components/ui/Alert';
 import { Spinner } from '../components/ui/Spinner';
+import { PasswordChecklist } from '../components/ui/PasswordChecklist';
+import { isPasswordStrong } from '../lib/passwordUtils';
 import { ShieldAlert, KeyRound, LogOut, ArrowLeft } from 'lucide-react';
 
 export function ChangePasswordPage() {
@@ -35,8 +37,8 @@ export function ChangePasswordPage() {
 
     if (!newPassword) {
       newErrors.newPassword = 'New password is required.';
-    } else if (newPassword.length < 6) {
-      newErrors.newPassword = 'New password must be at least 6 characters.';
+    } else if (!isPasswordStrong(newPassword)) {
+      newErrors.newPassword = 'New password does not meet the strength requirements.';
     }
 
     if (!confirmPassword) {
@@ -63,15 +65,15 @@ export function ChangePasswordPage() {
 
     setIsSubmitting(true);
     try {
-      const updatedUser = await changePassword(currentPassword, newPassword);
-      setSuccessMessage('Password changed successfully.');
+      await changePassword(currentPassword, newPassword);
+      setSuccessMessage('Password changed, please log in again.');
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-      const targetPath = updatedUser?.role === 'ADMIN' ? '/admin/tasks' : '/dashboard';
-      setTimeout(() => {
-        navigate(targetPath, { replace: true });
-      }, 1200);
+      navigate('/login', {
+        replace: true,
+        state: { message: 'Password changed, please log in again.' },
+      });
     } catch (err) {
       if (!err.response) {
         setServerError('Cannot reach the server. Check your connection or try again shortly.');
@@ -178,19 +180,22 @@ export function ChangePasswordPage() {
             autoComplete="current-password"
           />
 
-          <Input
-            label="New Password"
-            type="password"
-            placeholder="Minimum 6 characters"
-            value={newPassword}
-            onChange={(e) => {
-              setNewPassword(e.target.value);
-              if (errors.newPassword) setErrors({ ...errors, newPassword: '' });
-            }}
-            error={errors.newPassword}
-            disabled={isFormDisabled}
-            autoComplete="new-password"
-          />
+          <div>
+            <Input
+              label="New Password"
+              type="password"
+              placeholder="••••••••••••"
+              value={newPassword}
+              onChange={(e) => {
+                setNewPassword(e.target.value);
+                if (errors.newPassword) setErrors({ ...errors, newPassword: '' });
+              }}
+              error={errors.newPassword}
+              disabled={isFormDisabled}
+              autoComplete="new-password"
+            />
+            <PasswordChecklist password={newPassword} />
+          </div>
 
           <Input
             label="Confirm New Password"

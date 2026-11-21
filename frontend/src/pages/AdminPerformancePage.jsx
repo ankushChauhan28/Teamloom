@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { api, getPerformanceAnalytics, fetchAllEmployees } from '../lib/api';
+import { getPerformanceAnalytics, fetchAllEmployees } from '../lib/api';
 import { Navbar } from '../components/layout/Navbar';
 import { UserMenu } from '../components/layout/UserMenu';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/Card';

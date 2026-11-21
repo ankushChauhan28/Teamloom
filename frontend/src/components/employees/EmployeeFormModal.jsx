@@ -19,6 +19,7 @@ export function EmployeeFormModal({
   const [email, setEmail] = useState('');
   const [designation, setDesignation] = useState('');
   const [reportsToId, setReportsToId] = useState('');
+  const [accessLevel, setAccessLevel] = useState(3);
 
   const [errors, setErrors] = useState({});
   const [serverError, setServerError] = useState('');
@@ -31,6 +32,7 @@ export function EmployeeFormModal({
       setEmail('');
       setDesignation('');
       setReportsToId('');
+      setAccessLevel(3);
       setErrors({});
       setServerError('');
       setIsSubmitting(false);
@@ -68,9 +70,10 @@ export function EmployeeFormModal({
     try {
       const payload = {
         full_name: fullName.trim(),
-        email: email.trim(),
+        email: email.trim().toLowerCase(),
         designation: designation.trim() || null,
         reports_to_id: reportsToId ? Number(reportsToId) : null,
+        access_level: accessLevel ? Number(accessLevel) : 3,
       };
 
       const response = await api.post('/users/employees', payload);
@@ -81,8 +84,18 @@ export function EmployeeFormModal({
       onClose();
     } catch (err) {
       if (err.response) {
-        const { status, data } = err.response;
-        if (status === 422 && data?.detail) {
+        const { status, data, headers } = err.response;
+        if (status === 429) {
+          const retryAfter = headers?.['retry-after'];
+          const seconds = parseInt(retryAfter, 10);
+          if (!isNaN(seconds) && seconds > 0) {
+            const minutes = Math.max(1, Math.ceil(seconds / 60));
+            const unit = minutes === 1 ? 'minute' : 'minutes';
+            setServerError(`Too many invitations sent. Please try again in about ${minutes} ${unit}.`);
+          } else {
+            setServerError(data?.detail || 'Too many invitations sent. Please try again later.');
+          }
+        } else if (status === 422 && data?.detail) {
           if (Array.isArray(data.detail)) {
             const fieldMsgs = data.detail.map(
               (item) => `${item.loc?.slice(-1)[0] || 'Field'}: ${item.msg}`
@@ -113,7 +126,13 @@ export function EmployeeFormModal({
   };
 
   const reportsToOptions = existingEmployees
-    .filter((emp) => emp.role === 'EMPLOYEE' && emp.is_active !== false)
+    .filter(
+      (emp) =>
+        emp.role === 'EMPLOYEE' &&
+        emp.is_active !== false &&
+        emp.invitation_status !== 'PENDING' &&
+        emp.invitation_status !== 'REVOKED'
+    )
     .map((emp) => {
       const codeOrEmail = emp.employee_code || emp.email;
       const desigSuffix = emp.designation ? ` — ${emp.designation}` : '';
@@ -220,6 +239,19 @@ export function EmployeeFormModal({
           options={[
             { value: '', label: 'None (Top Level / No Supervisor)' },
             ...reportsToOptions,
+          ]}
+        />
+
+        {/* 5. Access Level */}
+        <Select
+          label="Access Level"
+          value={String(accessLevel)}
+          onChange={(e) => setAccessLevel(Number(e.target.value))}
+          disabled={isSubmitting}
+          options={[
+            { value: '3', label: 'Tier 3 — Employee (Standard)' },
+            { value: '2', label: 'Tier 2 — Supervisor' },
+            { value: '1', label: 'Tier 1 — Admin' },
           ]}
         />
       </form>

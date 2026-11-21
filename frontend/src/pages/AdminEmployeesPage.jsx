@@ -21,7 +21,34 @@ import {
   UserX,
   RotateCcw,
   AlertTriangle,
+  Send,
+  KeyRound,
+  XCircle,
 } from 'lucide-react';
+
+function formatApiError(err, fallback = 'Operation failed.') {
+  if (!err.response) {
+    return 'Cannot reach the server. Check your connection or try again shortly.';
+  }
+  const { status, data, headers } = err.response;
+  if (status === 429) {
+    const retryAfter = headers?.['retry-after'];
+    const seconds = parseInt(retryAfter, 10);
+    if (!isNaN(seconds) && seconds > 0) {
+      const minutes = Math.max(1, Math.ceil(seconds / 60));
+      const unit = minutes === 1 ? 'minute' : 'minutes';
+      return `Rate limit exceeded. Please try again in about ${minutes} ${unit}.`;
+    }
+    return data?.detail || 'Too many requests. Please try again later.';
+  }
+  if (status === 404) {
+    return data?.detail || 'Employee not found.';
+  }
+  if (status === 400) {
+    return data?.detail || 'Invalid request.';
+  }
+  return data?.detail || fallback;
+}
 
 /* Custom hook to log state changes */
 function useLoggedState(initialValue, stateName) {
@@ -72,7 +99,13 @@ function SupervisorChangeModal({ isOpen, onClose, onSuccess, employee, employees
   };
 
   const activeSupervisorOptions = employees
-    .filter((emp) => emp.is_active !== false && emp.id !== employee.id)
+    .filter(
+      (emp) =>
+        emp.is_active !== false &&
+        emp.id !== employee.id &&
+        emp.invitation_status !== 'PENDING' &&
+        emp.invitation_status !== 'REVOKED'
+    )
     .map((emp) => {
       const codeOrEmail = emp.employee_code || emp.email;
       const desigSuffix = emp.designation ? ` — ${emp.designation}` : '';
@@ -151,7 +184,11 @@ function RemoveConfirmModal({ isOpen, onClose, onConfirm, employee, allEmployees
   if (!isOpen || !employee) return null;
 
   const availableManagers = (allEmployees || []).filter(
-    (u) => u.is_active && u.id !== employee.id
+    (u) =>
+      u.is_active &&
+      u.id !== employee.id &&
+      u.invitation_status !== 'PENDING' &&
+      u.invitation_status !== 'REVOKED'
   );
 
   const handleSubordinateChange = (subId, managerId) => {
@@ -428,15 +465,69 @@ export function AdminEmployeesPage() {
   const handleEmployeeCreated = (newEmp) => {
     console.log('[AdminEmployeesPage] handleEmployeeCreated received new employee:', newEmp);
     fetchEmployees();
-    if (newEmp.email_sent) {
+    setNotification({
+      variant: 'success',
+      message: `Employee created — ${newEmp.employee_code} (${newEmp.full_name}). Invite sent (queued).`,
+    });
+  };
+
+  const handleResendInvite = async (e, emp) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    setNotification(null);
+    try {
+      const res = await api.post(`/users/${emp.id}/resend-invite`);
       setNotification({
         variant: 'success',
-        message: `Employee created successfully — ${newEmp.employee_code} (${newEmp.full_name}). Welcome email sent.`,
+        message: `${res.data?.message || 'Invitation resent.'} (queued)`,
       });
-    } else {
+    } catch (err) {
       setNotification({
-        variant: 'warning',
-        message: `Employee created (${newEmp.employee_code}), but welcome email could not be sent. Please check your SMTP configuration.`,
+        variant: 'danger',
+        message: formatApiError(err, 'Failed to resend invite.'),
+      });
+    }
+  };
+
+  const handleRevokeInvite = async (e, emp) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    setNotification(null);
+    try {
+      const res = await api.post(`/users/${emp.id}/revoke-invite`);
+      setNotification({
+        variant: 'info',
+        message: res.data?.message || 'Invitation revoked.',
+      });
+      fetchEmployees();
+    } catch (err) {
+      setNotification({
+        variant: 'danger',
+        message: formatApiError(err, 'Failed to revoke invite.'),
+      });
+    }
+  };
+
+  const handleSendPasswordReset = async (e, emp) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    setNotification(null);
+    try {
+      const res = await api.post(`/users/${emp.id}/send-password-reset`);
+      setNotification({
+        variant: 'success',
+        message: `${res.data?.message || 'Password reset link sent.'} (queued)`,
+      });
+    } catch (err) {
+      setNotification({
+        variant: 'danger',
+        message: formatApiError(err, 'Failed to send password reset link.'),
       });
     }
   };
@@ -729,46 +820,96 @@ export function AdminEmployeesPage() {
 
                         {/* Status Badge */}
                         <td className="py-3 px-4 whitespace-nowrap">
-                          {isActive ? (
-                            <Badge variant="emerald" size="sm">
-                              Active
+                          {emp.invitation_status === 'PENDING' ? (
+                            <Badge variant="amber" size="sm">
+                              Invite pending
                             </Badge>
-                          ) : (
+                          ) : emp.invitation_status === 'REVOKED' ? (
+                            <Badge variant="slate" size="sm">
+                              Revoked
+                            </Badge>
+                          ) : !isActive ? (
                             <Badge variant="slate" size="sm">
                               Removed
+                            </Badge>
+                          ) : (
+                            <Badge variant="emerald" size="sm">
+                              Active
                             </Badge>
                           )}
                         </td>
 
-                        {/* Actions (Change Supervisor & Remove / Restore) */}
+                        {/* Actions */}
                         <td className="py-3 px-4 text-right whitespace-nowrap">
                           <div className="flex items-center justify-end gap-2">
-                            {/* Change Supervisor Button */}
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => handleOpenSupervisorModal(e, emp)}
-                              className="text-xs text-[var(--text-secondary)] hover:text-[var(--accent)]"
-                              title="Change Supervisor"
-                            >
-                              <UserCheck className="w-3.5 h-3.5 mr-1" />
-                              Supervisor
-                            </Button>
+                            {emp.invitation_status === 'PENDING' ? (
+                              <>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={(e) => handleResendInvite(e, emp)}
+                                  className="text-xs text-[var(--accent)] hover:text-[var(--accent)]"
+                                  title="Resend invitation link"
+                                >
+                                  <Send className="w-3.5 h-3.5 mr-1" />
+                                  Resend invite
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={(e) => handleRevokeInvite(e, emp)}
+                                  className="text-xs text-[var(--red)] hover:text-[var(--red)]"
+                                  title="Revoke invitation"
+                                >
+                                  <XCircle className="w-3.5 h-3.5 mr-1 text-[var(--red)]" />
+                                  Revoke invite
+                                </Button>
+                              </>
+                            ) : emp.invitation_status === 'REVOKED' ? (
+                              <span className="text-[11px] text-[var(--text-muted)] italic">
+                                Revoked
+                              </span>
+                            ) : isActive ? (
+                              <>
+                                {/* Change Supervisor Button */}
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={(e) => handleOpenSupervisorModal(e, emp)}
+                                  className="text-xs text-[var(--text-secondary)] hover:text-[var(--accent)]"
+                                  title="Change Supervisor"
+                                >
+                                  <UserCheck className="w-3.5 h-3.5 mr-1" />
+                                  Supervisor
+                                </Button>
 
-                            {/* Remove vs Restore Button */}
-                            {isActive ? (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={(e) => handleOpenRemoveModal(e, emp)}
-                                disabled={isSelf}
-                                className="text-xs text-[var(--text-muted)] hover:text-[var(--red)] disabled:opacity-30 disabled:cursor-not-allowed"
-                                title={isSelf ? 'You cannot remove your own account' : 'Remove Employee'}
-                              >
-                                <UserX className="w-3.5 h-3.5 mr-1 text-[var(--red)]" />
-                                Remove
-                              </Button>
+                                {/* Send password reset link */}
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={(e) => handleSendPasswordReset(e, emp)}
+                                  className="text-xs text-[var(--text-secondary)] hover:text-[var(--accent)]"
+                                  title="Send password reset link"
+                                >
+                                  <KeyRound className="w-3.5 h-3.5 mr-1" />
+                                  Send password reset link
+                                </Button>
+
+                                {/* Remove Button */}
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={(e) => handleOpenRemoveModal(e, emp)}
+                                  disabled={isSelf}
+                                  className="text-xs text-[var(--text-muted)] hover:text-[var(--red)] disabled:opacity-30 disabled:cursor-not-allowed"
+                                  title={isSelf ? 'You cannot remove your own account' : 'Remove Employee'}
+                                >
+                                  <UserX className="w-3.5 h-3.5 mr-1 text-[var(--red)]" />
+                                  Remove
+                                </Button>
+                              </>
                             ) : (
+                              /* Restore Button */
                               <Button
                                 variant="ghost"
                                 size="sm"

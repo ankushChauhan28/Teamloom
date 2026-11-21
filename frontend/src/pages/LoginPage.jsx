@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
 import { api } from '../lib/api';
 import { AuthLayout } from '../components/layout/AuthLayout';
@@ -10,6 +10,7 @@ import { Spinner } from '../components/ui/Spinner';
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { login, user, isAuthenticated } = useAuthStore();
 
   const [mode, setMode] = useState('admin');
@@ -18,6 +19,7 @@ export function LoginPage() {
 
   const [errors, setErrors] = useState({});
   const [serverError, setServerError] = useState('');
+  const [infoMessage, setInfoMessage] = useState(location.state?.message || '');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Unverified admin resend verification state
@@ -219,6 +221,12 @@ export function LoginPage() {
         </button>
       </div>
 
+      {infoMessage && (
+        <Alert variant="info" className="mb-4" onDismiss={() => setInfoMessage('')}>
+          {infoMessage}
+        </Alert>
+      )}
+
       {serverError && (
         <Alert variant="danger" className="mb-4">
           {serverError}
@@ -289,19 +297,31 @@ export function LoginPage() {
           />
         )}
 
-        <Input
-          label="Password"
-          type="password"
-          placeholder="••••••••"
-          value={password}
-          onChange={(e) => {
-            setPassword(e.target.value);
-            if (errors.password) setErrors({ ...errors, password: '' });
-          }}
-          error={errors.password}
-          disabled={isSubmitting}
-          autoComplete="current-password"
-        />
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-xs font-medium text-[var(--text-secondary)]">
+              Password
+            </label>
+            <Link
+              to="/forgot-password"
+              className="text-xs text-[var(--accent)] hover:underline font-medium"
+            >
+              Forgot password?
+            </Link>
+          </div>
+          <Input
+            type="password"
+            placeholder="••••••••"
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              if (errors.password) setErrors({ ...errors, password: '' });
+            }}
+            error={errors.password}
+            disabled={isSubmitting}
+            autoComplete="current-password"
+          />
+        </div>
 
         <Button
           type="submit"

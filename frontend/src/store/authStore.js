@@ -28,7 +28,12 @@ export const useAuthStore = create((set, get) => ({
   fetchDirectReports: async () => {
     try {
       const res = await api.get('/users/me/reports');
-      const reports = (res.data || []).filter((r) => r.is_active !== false);
+      const reports = (res.data || []).filter(
+        (r) =>
+          r.is_active !== false &&
+          r.invitation_status !== 'PENDING' &&
+          r.invitation_status !== 'REVOKED'
+      );
       set({ directReports: reports });
       return reports;
     } catch {
@@ -88,15 +93,9 @@ export const useAuthStore = create((set, get) => ({
       current_password: currentPassword,
       new_password: newPassword,
     });
-    const updatedUser = res.data;
-    set({
-      user: updatedUser,
-      isAuthenticated: true,
-    });
-    if (!updatedUser.must_change_password) {
-      await get().fetchDirectReports();
-    }
-    return updatedUser;
+    // Backend revokes current session on password change; clear client in-memory auth state
+    get().clearAuth();
+    return res.data;
   },
 
   logout: async () => {

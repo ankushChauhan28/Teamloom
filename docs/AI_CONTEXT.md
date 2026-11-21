@@ -39,16 +39,30 @@
   * **Slice 5 (Stabilization Batch Completed)**: Complete API-level tenant isolation test suite (`tests/test_tenant_isolation.py`, `tests/fixtures_tenant_isolation.py`), proving zero cross-tenant leakage across all routes.
   * **Rate Limiting (Level 1 Completed)**: Abstract `RateLimiter` interface, `InMemoryRateLimiter` sliding-window implementation, dual-key auth protection (compound `{client IP, normalized identifier}` 10/15m + per-IP ceiling 100/15m), stale-key cleanup, trusted proxy support, and anti-enumeration.
   * **Frontend CI Checks (Completed)**: Added `frontend-checks` job to GitHub Actions CI running Node.js 22 LTS, `npm ci` with cache, `oxlint` linting, and `vite build` production bundling.
-  * **Slice 4e (Backend PR 1 Completed on `feat/slice-4e-invite-backend`)**:
-    * Replaced admin-generated temporary passwords with secure, expiring 48-hour set-password invite links (`POST /users/employees`) and 1-hour self-serve & admin-triggered password reset links (`POST /auth/forgot-password`, `POST /auth/reset-password`, `POST /users/{id}/send-password-reset`).
-    * Implemented `user_tokens` table with SHA-256 token hashing, atomic single-use consumption (`UPDATE ... RETURNING`), type constraint (`INVITE` / `PASSWORD_RESET`), and invalidation.
-    * Added `invitation_status` (`PENDING`, `ACTIVE`, `REVOKED`), `invitation_accepted_at`, and `tokens_valid_after` to `users`.
-    * Implemented universal session invalidation via `users.tokens_valid_after`: both access tokens (`get_current_user`) and refresh tokens (`refresh_access_token`) reject tokens issued before password changes/resets.
-    * Added admin resend/revoke endpoints (`POST /users/{id}/resend-invite`, `POST /users/{id}/revoke-invite`). Permanently removed `POST /users/{id}/reset-temp-password`.
-    * Added constant dummy-hash timing defense across all recovery and login channels.
-    * Added migration `q7r8s9t0u1v2` on top of `p6q7r8s9t0u1` with clean downgrade and verified zero Alembic drift.
-    * Comprehensive test suite: 22 new tests in `tests/test_invite_flow.py`, tenant isolation updates in `tests/test_tenant_isolation.py`.
-* **Pending Slices**: Slice 4e Frontend (PR 2), Slice 6 (plans & billing), Slices 7–10 (Razorpay billing, lifecycle, invoices, operator CLI), and Slice 11 (go-live checklist).
+  * **Slice 4e (Employee Invite Flow & Self-Serve Password Reset Completed across Backend & Frontend)**:
+    * **Backend (PR 1)**:
+      * Replaced admin-generated temporary passwords with secure, expiring 48-hour set-password invite links (`POST /users/employees`) and 1-hour self-serve & admin-triggered password reset links (`POST /auth/forgot-password`, `POST /auth/reset-password`, `POST /users/{id}/send-password-reset`).
+      * Implemented `user_tokens` table with SHA-256 token hashing, atomic single-use consumption (`UPDATE ... RETURNING`), type constraint (`INVITE` / `PASSWORD_RESET`), and invalidation.
+      * Added `invitation_status` (`PENDING`, `ACTIVE`, `REVOKED`), `invitation_accepted_at`, and `tokens_valid_after` to `users`.
+      * Implemented universal session invalidation via `users.tokens_valid_after`: both access tokens (`get_current_user`) and refresh tokens (`refresh_access_token`) reject tokens issued before password changes/resets.
+      * Added admin resend/revoke endpoints (`POST /users/{id}/resend-invite`, `POST /users/{id}/revoke-invite`). Permanently removed `POST /users/{id}/reset-temp-password`.
+      * Added constant dummy-hash timing defense across all recovery and login channels.
+      * Added migration `q7r8s9t0u1v2` on top of `p6q7r8s9t0u1` with clean downgrade and verified zero Alembic drift.
+      * Comprehensive test suite: 22 new tests in `tests/test_invite_flow.py`, tenant isolation updates in `tests/test_tenant_isolation.py`.
+    * **Frontend (PR 2 on `feat/slice-4e-invite-frontend`)**:
+      * Added public auth pages with "Deep Pine" design system and `AuthLayout`:
+        * `/accept-invite?token=...`: new password + confirm with live strength checklist (8+ chars, upper, lower, digit, special), success view linking to login.
+        * `/forgot-password`: email form always showing generic anti-enumeration confirmation message and `Retry-After` rate limit handling.
+        * `/reset-password?token=...`: new password + confirm with live strength checklist and success view linking to login.
+        * Generic friendly errors on missing, invalid, expired, or used tokens. Added "Forgot password?" links on `/login` across both admin and employee modes.
+      * Updated Admin roster (`AdminEmployeesPage`):
+        * Employee creation modal strictly constrained to real fields (`full_name`, `email`, `designation`, `reports_to_id`, `access_level`); no temporary password generated or displayed; shows `"Invite sent (queued)"`.
+        * Added status badge derived from `invitation_status` (`Active`, `Invite pending`, `Revoked`).
+        * PENDING rows display **Resend invite** and **Revoke invite** action buttons; ACTIVE rows display **Send password reset link** button.
+        * Handled HTTP 400, 404, and 429 (using `Retry-After`) with clear alerts.
+      * Excluded `PENDING` and `REVOKED` users from assignee dropdowns, manager dropdowns, and subordinate reassignment dialogs.
+      * Updated password change lifecycle: after `POST /auth/change-password` session revocation, client clears auth state and tokens, redirecting to `/login` with `"Password changed, please log in again."`.
+* **Pending Slices**: Slice 6 (plans & billing), Slices 7–10 (Razorpay billing, lifecycle, invoices, operator CLI), and Slice 11 (go-live checklist).
 * **Alembic Head Revision**: `q7r8s9t0u1v2` (`slice4e_user_tokens_and_invite_fields`).
 * **Test Suite Health**: **316 collected tests** via `pytest --collect-only -q` (100% passing in CI).
 
@@ -65,7 +79,7 @@
      * **Rate Limiting (Level 1 Completed on `fix/rate-limiting`)**: Dual-key sliding window (`{client IP, identifier}` 10/15m + IP ceiling 100/15m) behind swappable `RateLimiter` interface with stale-key cleanup and trusted-proxy defense.
      * **Frontend CI Checks (Completed on `ci/frontend-checks`)**: Automated `npm run lint` and `npm run build` in GitHub Actions workflow.
      * **Next Planned Work**:
-       1. Slice 4e (Employee Invite Flow & Self-Serve Password Reset): Backend PR 1 Completed on `feat/slice-4e-invite-backend`. Next is PR 2 (Frontend UI: /accept-invite, /forgot-password, /reset-password, and AdminEmployeesPage actions).
+       1. Slice 4e (Employee Invite Flow & Self-Serve Password Reset): Completed across Backend PR 1 and Frontend PR 2 (`feat/slice-4e-invite-frontend`).
        2. Slice 6 (Plans & Billing): Plan subscription model, `pending_payment` access gating, race-safe seat limit enforcement.
    *(Note: `docs/TEAMLOOM_SAAS_REQUIREMENTS.md` originally suggested Slice 4e -> Slice 5 -> Slice 6; the owner's plan prioritizes codebase stabilization and lands the Slice 5 isolation test suite first, followed by rate limiting stabilization, frontend CI checks, Slice 4e, and Slice 6).*
 2. **Supervisor Deactivation Safety**: Deactivating a supervisor must **not** silently set direct reports' `reports_to_id = NULL`. The API must require the admin to reassign subordinates first, returning HTTP 409 Conflict with the subordinate list if reassignment is needed.
